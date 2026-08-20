@@ -1,0 +1,58 @@
+[
+  {
+    "slot_id": "A-01",
+    "zone": "ZONE-A",
+    "allowed_category": "TWO_WHEELER",
+    "status": "AVAILABLE",
+    "polygon_coords": [[120, 340], [180, 340], [180, 420], [120, 420]],
+    "current_track_id": null
+  },
+  {
+    "slot_id": "A-02",
+    "zone": "ZONE-A",
+    "allowed_category": "TWO_WHEELER",
+    "status": "AVAILABLE",
+    "polygon_coords": [[190, 340], [250, 340], [250, 420], [190, 420]],
+    "current_track_id": null
+  },
+  {
+    "slot_id": "A-03",
+    "zone": "ZONE-A",
+    "allowed_category": "COMPACT_CAR",
+    "status": "AVAILABLE",
+    "polygon_coords": [[270, 320], [380, 320], [380, 450], [270, 450]],
+    "current_track_id": null
+  },
+  {
+    "slot_id": "A-04",
+    "zone": "ZONE-A",
+    "allowed_category": "COMPACT_CAR",
+    "status": "AVAILABLE",
+    "polygon_coords": [[400, 320], [510, 320], [510, 450], [400, 450]],
+    "current_track_id": null
+  },
+  {
+    "slot_id": "B-01",
+    "zone": "ZONE-B",
+    "allowed_category": "SUV_SEDAN",
+    "status": "AVAILABLE",
+    "polygon_coords": [[540, 300], [670, 300], [670, 460], [540, 460]],
+    "current_track_id": null
+  },
+  {
+    "slot_id": "B-02",
+    "zone": "ZONE-B",
+    "allowed_category": "SUV_SEDAN",
+    "status": "AVAILABLE",
+    "polygon_coords": [[690, 300], [820, 300], [820, 460], [690, 460]],
+    "current_track_id": null
+  },
+  {
+    "slot_id": "C-01",
+    "zone": "ZONE-C",
+    "allowed_category": "HEAVY_VEHICLE",
+    "status": "AVAILABLE",
+    "polygon_coords": [[850, 280], [1020, 280], [1020, 520], [850, 520]],
+    "current_track_id": null
+  }
+]
