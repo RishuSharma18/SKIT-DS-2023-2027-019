@@ -1,0 +1,26 @@
+[
+  {
+    "alertId": "alert-001",
+    "alertType": "STOLEN_VEHICLE",
+    "severity": "HIGH",
+    "plateNumber": "RJ14AB1234",
+    "slotId": "A-01",
+    "cameraId": "cam-1",
+    "snapshotUrl": "/uploads/snap-stolen.jpg",
+    "message": "CRITICAL: Stolen vehicle recognized at entrance",
+    "isAcknowledged": false,
+    "createdAt": "2026-09-10T14:30:00Z"
+  },
+  {
+    "alertId": "alert-002",
+    "alertType": "WRONG_PARKING",
+    "severity": "MEDIUM",
+    "plateNumber": "RJ14CD5678",
+    "slotId": "A-02",
+    "cameraId": "cam-2",
+    "snapshotUrl": null,
+    "message": "Vehicle parked across dual slots",
+    "isAcknowledged": true,
+    "createdAt": "2026-09-10T15:10:00Z"
+  }
+]
