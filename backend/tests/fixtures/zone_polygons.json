@@ -1,0 +1,42 @@
+{
+  "camera_id": "cam-1",
+  "zone_name": "GATE_AND_ZONE_A",
+  "resolution": [1920, 1080],
+  "slots": [
+    {
+      "slot_id": "A-01",
+      "allowed_category": "TWO_WHEELER",
+      "polygon": [[120, 340], [180, 340], [180, 420], [120, 420]]
+    },
+    {
+      "slot_id": "A-02",
+      "allowed_category": "TWO_WHEELER",
+      "polygon": [[190, 340], [250, 340], [250, 420], [190, 420]]
+    },
+    {
+      "slot_id": "A-03",
+      "allowed_category": "COMPACT_CAR",
+      "polygon": [[270, 320], [380, 320], [380, 450], [270, 450]]
+    },
+    {
+      "slot_id": "A-04",
+      "allowed_category": "COMPACT_CAR",
+      "polygon": [[400, 320], [510, 320], [510, 450], [400, 450]]
+    }
+  ],
+  "no_parking_zones": [
+    {
+      "zone_id": "NP-01",
+      "name": "Fire Hydrant & Emergency Access Aisle",
+      "polygon": [[50, 500], [200, 500], [200, 700], [50, 700]]
+    }
+  ],
+  "tripwires": [
+    {
+      "tripwire_id": "TW-ENTRY-01",
+      "name": "Main Entrance Line",
+      "line": [[100, 800], [400, 800]],
+      "direction": "INBOUND"
+    }
+  ]
+}
