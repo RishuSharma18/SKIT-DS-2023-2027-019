@@ -1,0 +1,8 @@
+{
+  "recommendedSlotId": "A-03",
+  "zone": "ZONE-A",
+  "allowedCategory": "COMPACT_CAR",
+  "status": "RESERVED",
+  "expiresInSeconds": 300,
+  "guidance": "Enter through Gate 1, turn left into Zone A, bay 3."
+}
