@@ -1,0 +1,14 @@
+node_modules/
+.env
+*.log
+dist/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.pt
+ai-service/samples/*.mp4
+ai-service/samples/*.avi
+.DS_Store
+.idea/
+.vscode/

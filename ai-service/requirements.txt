@@ -1,0 +1,8 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+ultralytics>=8.2
+opencv-python>=4.9
+easyocr>=1.7
+numpy>=1.26
+requests>=2.32
+python-dotenv>=1.0

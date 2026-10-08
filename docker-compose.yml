@@ -1,0 +1,9 @@
+# Only MongoDB runs in Docker; run the 3 apps locally while developing.
+services:
+  mongo:
+    image: mongo:7
+    container_name: cctv-mongo
+    ports: ["27017:27017"]
+    volumes: [mongo_data:/data/db]
+volumes:
+  mongo_data:

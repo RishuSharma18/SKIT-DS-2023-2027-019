@@ -1,0 +1,8 @@
+{
+  "_note": "Copy to slots.json. Polygons are pixel coords [x,y] of YOUR video frame. Use tools/draw_slots.py (todo) or any image editor to find them.",
+  "slots": [
+    { "slotId": "A-01", "type": "bike", "polygon": [[50, 400], [130, 400], [130, 470], [50, 470]] },
+    { "slotId": "A-04", "type": "car",  "polygon": [[150, 380], [300, 380], [300, 480], [150, 480]] },
+    { "slotId": "A-10", "type": "suv",  "polygon": [[320, 380], [500, 380], [500, 480], [320, 480]] }
+  ]
+}
