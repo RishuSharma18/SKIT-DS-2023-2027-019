@@ -57,6 +57,18 @@ curl -X POST localhost:5000/api/events -H "x-api-key: dev-key" -H "Content-Type:
 ```
 A **stolen_vehicle** alert should appear on the dashboard (that plate is in the seeded watchlist).
 
+## REST API Endpoints
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/health` | None | Health check & server status |
+| `GET` | `/api/stats` | None | Overview metrics (total slots, free, occupied, active vehicles, today's entries, open alerts) |
+| `GET` | `/api/slots` | None | List all parking slots and real-time statuses |
+| `GET` | `/api/slots/recommend?vehicleType=car` | None | Recommend best available slot for `bike`, `car`, or `suv` |
+| `GET` | `/api/sessions` | None | List parking sessions |
+| `GET` | `/api/alerts` | None | List recent security and safety alerts |
+| `PATCH` | `/api/alerts/:id/ack` | None | Acknowledge/dismiss an alert |
+| `POST` | `/api/events` | `x-api-key` | Ingest AI tracking/safety events (validated payload) |
+
 ## Event contract (ai-service → backend `POST /api/events`)
 | type | fields | effect |
 |---|---|---|
@@ -64,7 +76,7 @@ A **stolen_vehicle** alert should appear on the dashboard (that plate is in the 
 | `plate` | trackId, plate | attaches plate, checks watchlist |
 | `parked` | trackId, slotId | marks slot occupied |
 | `exit` | trackId | closes session, stores duration, frees slot |
-| `wrong_parking` | trackId, plate? | raises alert |
+| `wrong_parking` | trackId, plate?, message? | raises alert |
 | `crash` | message?, snapshot? | raises alert |
 
 Watchlist is **simulated** for the prototype (as stated in the proposal).

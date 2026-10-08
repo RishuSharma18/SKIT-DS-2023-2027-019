@@ -14,5 +14,8 @@
     "mongoose": "^8.5.0",
     "morgan": "^1.10.0",
     "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.3.0"
   }
 }
