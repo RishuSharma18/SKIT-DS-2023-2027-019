@@ -4,11 +4,14 @@ import { getSlots, getSessions, getAlerts, ackAlert } from './api.js';
 import SlotGrid from './components/SlotGrid.jsx';
 import AlertList from './components/AlertList.jsx';
 import SessionTable from './components/SessionTable.jsx';
+import WatchlistPanel from './components/WatchlistPanel.jsx';
+import SlotRecommend from './components/SlotRecommend.jsx';
 
 export default function App() {
   const [slots, setSlots] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [actionError, setActionError] = useState('');
 
   useEffect(() => {
     getSlots().then(setSlots).catch(console.error);
@@ -29,8 +32,13 @@ export default function App() {
   const open = alerts.filter((a) => !a.acknowledged).length;
 
   const onAck = async (id) => {
-    const updated = await ackAlert(id);
-    setAlerts((prev) => prev.map((a) => (a._id === id ? updated : a)));
+    setActionError('');
+    try {
+      const updated = await ackAlert(id);
+      setAlerts((prev) => prev.map((a) => (a._id === id ? updated : a)));
+    } catch (err) {
+      setActionError(err.message);
+    }
   };
 
   return (
@@ -54,7 +62,13 @@ export default function App() {
         </section>
 
         <section className="card"><h2>Parking slots</h2><SlotGrid slots={slots} /></section>
-        <section className="card"><h2>Alerts</h2><AlertList alerts={alerts} onAck={onAck} /></section>
+        <section className="card"><SlotRecommend /></section>
+        <section className="card">
+          <h2>Alerts</h2>
+          {actionError && <p className="error" role="alert">{actionError}</p>}
+          <AlertList alerts={alerts} onAck={onAck} />
+        </section>
+        <section className="card"><WatchlistPanel /></section>
         <section className="card wide"><h2>Check-in / check-out log</h2><SessionTable sessions={sessions} /></section>
       </main>
     </div>
