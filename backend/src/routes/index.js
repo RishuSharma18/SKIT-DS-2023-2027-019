@@ -4,6 +4,7 @@ import ParkingSession from '../models/ParkingSession.js';
 import Watchlist from '../models/Watchlist.js';
 import Alert from '../models/Alert.js';
 import apiKey from '../middleware/apiKey.js';
+import validateEvent from '../middleware/validateEvent.js';
 import { handleEvent } from '../services/events.js';
 import { recommendSlot } from '../services/allocation.js';
 
@@ -11,6 +12,31 @@ const r = Router();
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 
 r.get('/health', (req, res) => res.json({ ok: true, time: new Date() }));
+
+// ---- Stats (parking overview)
+r.get('/stats', wrap(async (req, res) => {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const [totalSlots, freeSlots, occupied, activeVehicles, todayEntries, openAlerts] = await Promise.all([
+    ParkingSlot.countDocuments(),
+    ParkingSlot.countDocuments({ status: 'free' }),
+    ParkingSlot.countDocuments({ status: 'occupied' }),
+    ParkingSession.countDocuments({ status: 'active' }),
+    ParkingSession.countDocuments({ entryTime: { $gte: startOfToday } }),
+    Alert.countDocuments({ acknowledged: false }),
+  ]);
+
+  res.json({
+    totalSlots,
+    freeSlots,
+    occupied,
+    occupiedSlots: occupied,
+    activeVehicles,
+    todayEntries,
+    openAlerts,
+  });
+}));
 
 // ---- Slots
 r.get('/slots', wrap(async (req, res) => res.json(await ParkingSlot.find().sort({ slotId: 1 }))));
@@ -39,7 +65,7 @@ r.patch('/alerts/:id/ack', wrap(async (req, res) =>
   res.json(await Alert.findByIdAndUpdate(req.params.id, { acknowledged: true }, { new: true }))));
 
 // ---- Ingestion from the AI service
-r.post('/events', apiKey, wrap(async (req, res) => {
+r.post('/events', apiKey, validateEvent, wrap(async (req, res) => {
   res.status(201).json(await handleEvent(req.app.get('io'), req.body));
 }));
 
