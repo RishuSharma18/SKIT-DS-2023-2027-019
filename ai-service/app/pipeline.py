@@ -7,24 +7,15 @@ from ultralytics import YOLO
 from . import config, events
 from .plate_reader import PlateReader
 from .slots import SlotMap
-
-CLASS_TO_CATEGORY = {2: "car", 3: "bike", 5: "suv", 7: "suv"}
+from .vehicle import categorize
 
 
 class Pipeline:
     def __init__(self):
         self.model = YOLO(config.YOLO_MODEL)
         self.slots = SlotMap(config.SLOTS_FILE)
-        self.ocr = PlateReader()
+        self.ocr = PlateReader() if config.ENABLE_OCR else None
         self.tracks = {}   # track_id -> state dict
-
-    def _category(self, cls_id, box, frame_area):
-        cat = CLASS_TO_CATEGORY.get(cls_id, "car")
-        if cat == "car":   # YOLO/COCO has no SUV class -> use relative size
-            x1, y1, x2, y2 = box
-            if (x2 - x1) * (y2 - y1) / frame_area > config.SUV_AREA_RATIO:
-                cat = "suv"
-        return cat
 
     def run(self):
         """Generator: yields annotated BGR frames. Sends events as a side effect."""
@@ -57,7 +48,7 @@ class Pipeline:
                     centre = ((x1 + x2) / 2, y2 - (y2 - y1) * 0.15)  # near wheels
                     st = self.tracks.setdefault(tid, {
                         "frames": 0, "missing": 0, "entered": False, "plate": None,
-                        "cat": self._category(cls_id, box, w * h), "last": centre,
+                        "cat": categorize(cls_id, box, w * h), "last": centre,
                         "still": 0, "slot": None, "wrong_sent": False,
                     })
                     st["frames"] += 1
@@ -69,7 +60,7 @@ class Pipeline:
                         events.send("entry", trackId=tid, vehicleType=st["cat"])
 
                     # --- plate OCR every N frames until we have one
-                    if st["entered"] and not st["plate"] and frame_idx % config.OCR_EVERY_N_FRAMES == 0:
+                    if self.ocr and st["entered"] and not st["plate"] and frame_idx % config.OCR_EVERY_N_FRAMES == 0:
                         crop = frame[y1 + (y2 - y1) // 2: y2, x1:x2]   # lower half of vehicle
                         plate = self.ocr.read(crop, tid)
                         if plate:

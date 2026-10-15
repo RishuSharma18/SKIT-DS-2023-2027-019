@@ -44,11 +44,38 @@ npm run dev           # http://localhost:5173
 cd ai-service
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
-# put a parking video in ai-service/samples/parking.mp4, then edit config/slots.json to match it
+# Copy .env.example to .env if .env does not already exist; merge settings instead of overwriting an existing .env.
+# Record or download a parking video to samples/parking.mp4 (video files are gitignored).
+# Use tools/draw_slots.py to draw slot polygons for that video before running the pipeline.
+python tools/draw_slots.py --source samples/parking.mp4 --out config/slots.json
+python tools/detect_demo.py --source samples/parking.mp4
+# Review boxes and IDs; optionally retry with --conf 0.3 to compare detection sensitivity.
+# If the printed largest-gap suggestion matches cars vs SUVs in your footage, tune SUV_AREA_RATIO in .env.
 python run_pipeline.py --show                          # dev window, press q to quit
 uvicorn app.main:app --port 8000                       # or: serve /stream for the dashboard
 ```
+
+On Windows PowerShell, the equivalent AI-service setup is:
+
+```powershell
+cd ai-service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+New-Item -ItemType Directory -Force samples | Out-Null
+# Put your parking video at samples\parking.mp4, then:
+python tools\draw_slots.py --source samples\parking.mp4 --out config\slots.json
+python tools\detect_demo.py --source samples\parking.mp4
+python run_pipeline.py --show
+```
+
+The slot polygons must be drawn on the actual video frame; the committed slot coordinates are examples,
+not calibrated coordinates for your camera. Work with the dashboard owner to agree on the parking-slot
+layout and vehicle types before saving `config/slots.json`. In COCO, YOLO labels motorcycles as `bike`,
+cars as `car`, and buses/trucks as `suv`; SUV detection is an approximation based on those classes and
+the configurable bounding-box area ratio, not a dedicated SUV class. Disable OCR in `.env` with
+`ENABLE_OCR=0` for detection-only runs when EasyOCR is not needed.
 
 ### Test the backend without any AI (fake an event)
 ```bash

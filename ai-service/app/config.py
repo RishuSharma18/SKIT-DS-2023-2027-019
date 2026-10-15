@@ -13,6 +13,7 @@ VIDEO_SOURCE = int(_src) if _src.isdigit() else _src
 YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")
 SLOTS_FILE = os.getenv("SLOTS_FILE", "config/slots.json")
 CONFIDENCE = float(os.getenv("CONFIDENCE", "0.4"))
+ENABLE_OCR = os.getenv("ENABLE_OCR", "1") == "1"   # set 0 to test detection without EasyOCR
 OCR_EVERY_N_FRAMES = int(os.getenv("OCR_EVERY_N_FRAMES", "10"))
 EXIT_AFTER_MISSING_FRAMES = int(os.getenv("EXIT_AFTER_MISSING_FRAMES", "45"))
 ENTRY_CONFIRM_FRAMES = int(os.getenv("ENTRY_CONFIRM_FRAMES", "15"))
