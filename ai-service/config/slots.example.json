@@ -1,5 +1,5 @@
 {
-  "_note": "Copy to slots.json. Polygons are pixel coords [x,y] of YOUR video frame. Use tools/draw_slots.py (todo) or any image editor to find them.",
+  "_note": "Example coordinates only. Draw polygons on your own video with python tools/draw_slots.py --source samples/parking.mp4; do not use these example slots as real coordinates.",
   "slots": [
     { "slotId": "A-01", "type": "bike", "polygon": [[50, 400], [130, 400], [130, 470], [50, 470]] },
     { "slotId": "A-04", "type": "car",  "polygon": [[150, 380], [300, 380], [300, 480], [150, 480]] },
