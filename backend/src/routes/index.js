@@ -38,6 +38,37 @@ r.get('/stats', wrap(async (req, res) => {
   });
 }));
 
+// ---- Analytics: hourly entries for today (or ?date=YYYY-MM-DD)
+r.get('/analytics/hourly', wrap(async (req, res) => {
+  const dateBase = req.query.date ? new Date(req.query.date) : new Date();
+  const startOfDay = new Date(dateBase);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const endOfDay = new Date(dateBase);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const sessions = await ParkingSession.find(
+    { entryTime: { $gte: startOfDay, $lte: endOfDay } },
+    { entryTime: 1 }
+  );
+
+  const hourly = Array.from({ length: 24 }, (_, i) => ({ hour: i, entries: 0 }));
+  for (const s of sessions) {
+    if (s.entryTime) {
+      const h = new Date(s.entryTime).getHours();
+      if (h >= 0 && h < 24) {
+        hourly[h].entries++;
+      }
+    }
+  }
+
+  if (req.query.nonzero === 'true') {
+    return res.json(hourly.filter((h) => h.entries > 0));
+  }
+
+  res.json(hourly);
+}));
+
 // ---- Slots
 r.get('/slots', wrap(async (req, res) => res.json(await ParkingSlot.find().sort({ slotId: 1 }))));
 r.get('/slots/recommend', wrap(async (req, res) => {

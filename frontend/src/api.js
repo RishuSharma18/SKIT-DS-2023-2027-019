@@ -23,3 +23,5 @@ export const deleteWatchlistEntry = (id) =>
   request(`/api/watchlist/${id}`, { method: 'DELETE' });
 export const recommendSlot = (type) =>
   request(`/api/slots/recommend?type=${encodeURIComponent(type)}`);
+export const getHourlyAnalytics = (date) =>
+  request(`/api/analytics/hourly${date ? `?date=${encodeURIComponent(date)}` : ''}`);

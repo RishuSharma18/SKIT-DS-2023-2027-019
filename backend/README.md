@@ -18,6 +18,7 @@ npm run simulate  # Simulates live camera events (or node src/scripts/simulate.j
 |---|---|---|---|
 | `GET` | `/api/health` | Public | Health status and server time |
 | `GET` | `/api/stats` | Public | Real-time overview metrics: `totalSlots`, `freeSlots`, `occupied`, `activeVehicles`, `todayEntries`, `openAlerts` |
+| `GET` | `/api/analytics/hourly` | Public | Hourly entry count for today `[{hour: 0, entries: 0}, ...]` |
 | `GET` | `/api/slots` | Public | Full list of parking slots and status (`free`/`occupied`) |
 | `GET` | `/api/slots/recommend?vehicleType=car` | Public | Recommends nearest available slot for vehicle type (`bike`, `car`, `suv`) |
 | `GET` | `/api/sessions` | Public | List of parking sessions (active and past) |
