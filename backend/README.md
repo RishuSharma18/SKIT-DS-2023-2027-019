@@ -9,6 +9,7 @@ cd backend
 npm install
 npm run seed      # Seeds 12 demo slots + 2 watchlist plates
 npm run dev       # Starts server on http://localhost:5000 with nodemon
+npm run simulate  # Simulates live camera events (or node src/scripts/simulate.js)
 ```
 
 ## REST API Endpoints
