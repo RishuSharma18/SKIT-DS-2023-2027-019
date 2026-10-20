@@ -1,0 +1,29 @@
+[
+  {
+    "session_id": "overstay-case-01",
+    "track_id": 901,
+    "plate_number": "RJ14AB9001",
+    "entry_time": "2026-10-20T08:00:00Z",
+    "elapsed_minutes": 239.5,
+    "expected_status": "ACTIVE",
+    "expected_alert": false
+  },
+  {
+    "session_id": "overstay-case-02",
+    "track_id": 902,
+    "plate_number": "RJ14AB9002",
+    "entry_time": "2026-10-20T07:59:00Z",
+    "elapsed_minutes": 241.0,
+    "expected_status": "OVERSTAY",
+    "expected_alert": true
+  },
+  {
+    "session_id": "overstay-case-03",
+    "track_id": 903,
+    "plate_number": "RJ14AB9003",
+    "entry_time": "2026-10-19T20:00:00Z",
+    "elapsed_minutes": 960.0,
+    "expected_status": "OVERSTAY",
+    "expected_alert": true
+  }
+]
