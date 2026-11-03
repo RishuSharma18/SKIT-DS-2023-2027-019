@@ -1,0 +1,26 @@
+{
+  "streams": [
+    {
+      "camera_id": "cam-1",
+      "location": "Main Entrance Gate",
+      "fps": 30,
+      "tripwires": [
+        {"id": "TW-1", "coords": [[200, 750], [600, 750]], "type": "ENTRY"}
+      ]
+    },
+    {
+      "camera_id": "cam-2",
+      "location": "Zone A & B Parking Rows",
+      "fps": 25,
+      "monitored_slots": ["A-01", "A-02", "A-03", "A-04", "B-01", "B-02"]
+    },
+    {
+      "camera_id": "cam-3",
+      "location": "North Exit Toll Gate",
+      "fps": 30,
+      "tripwires": [
+        {"id": "TW-2", "coords": [[150, 800], [550, 800]], "type": "EXIT"}
+      ]
+    }
+  ]
+}
