@@ -10,6 +10,7 @@ import { recommendSlot } from '../services/allocation.js';
 
 const r = Router();
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 r.get('/health', (req, res) => res.json({ ok: true, time: new Date() }));
 
@@ -72,14 +73,44 @@ r.get('/analytics/hourly', wrap(async (req, res) => {
 // ---- Slots
 r.get('/slots', wrap(async (req, res) => res.json(await ParkingSlot.find().sort({ slotId: 1 }))));
 r.get('/slots/recommend', wrap(async (req, res) => {
-  const slot = await recommendSlot(req.query.type || 'car');
+  const slot = await recommendSlot(req.query.type || req.query.vehicleType || 'car');
   res.json({ slot });
 }));
 
 // ---- Sessions (check-in / check-out history)
 r.get('/sessions', wrap(async (req, res) => {
-  const filter = req.query.status ? { status: req.query.status } : {};
-  res.json(await ParkingSession.find(filter).sort({ createdAt: -1 }).limit(200));
+  const filter = {};
+
+  if (req.query.plate) {
+    filter.plate = { $regex: escapeRegex(req.query.plate.trim()), $options: 'i' };
+  }
+  if (req.query.status) {
+    filter.status = req.query.status.trim();
+  }
+  if (req.query.vehicleType) {
+    filter.vehicleType = req.query.vehicleType.trim();
+  }
+  if (req.query.slotId) {
+    filter.slotId = req.query.slotId.trim();
+  }
+  if (req.query.cameraId) {
+    filter.cameraId = req.query.cameraId.trim();
+  }
+
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = req.query.limit !== undefined
+    ? Math.max(1, parseInt(req.query.limit, 10) || 20)
+    : (req.query.page ? 20 : 200);
+  const skip = (page - 1) * limit;
+
+  const [total, sessions] = await Promise.all([
+    ParkingSession.countDocuments(filter),
+    ParkingSession.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+  ]);
+
+  res.setHeader('X-Total-Count', total.toString());
+  res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+  res.json(sessions);
 }));
 
 // ---- Watchlist (simulated stolen-vehicle DB)
@@ -91,7 +122,49 @@ r.delete('/watchlist/:id', wrap(async (req, res) => {
 }));
 
 // ---- Alerts
-r.get('/alerts', wrap(async (req, res) => res.json(await Alert.find().sort({ createdAt: -1 }).limit(100))));
+r.get('/alerts', wrap(async (req, res) => {
+  const filter = {};
+
+  if (req.query.type && req.query.type !== 'all') {
+    filter.type = req.query.type.trim();
+  }
+  if (req.query.acknowledged !== undefined && req.query.acknowledged !== '') {
+    const val = String(req.query.acknowledged).toLowerCase().trim();
+    if (val === 'true') {
+      filter.acknowledged = true;
+    } else if (val === 'false') {
+      filter.acknowledged = false;
+    }
+  }
+  if (req.query.severity) {
+    filter.severity = req.query.severity.trim();
+  }
+  if (req.query.plate) {
+    filter.plate = { $regex: escapeRegex(req.query.plate.trim()), $options: 'i' };
+  }
+  if (req.query.slotId) {
+    filter.slotId = req.query.slotId.trim();
+  }
+  if (req.query.cameraId) {
+    filter.cameraId = req.query.cameraId.trim();
+  }
+
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = req.query.limit !== undefined
+    ? Math.max(1, parseInt(req.query.limit, 10) || 20)
+    : (req.query.page ? 20 : 100);
+  const skip = (page - 1) * limit;
+
+  const [total, alerts] = await Promise.all([
+    Alert.countDocuments(filter),
+    Alert.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+  ]);
+
+  res.setHeader('X-Total-Count', total.toString());
+  res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+  res.json(alerts);
+}));
+
 r.patch('/alerts/:id/ack', wrap(async (req, res) =>
   res.json(await Alert.findByIdAndUpdate(req.params.id, { acknowledged: true }, { new: true }))));
 

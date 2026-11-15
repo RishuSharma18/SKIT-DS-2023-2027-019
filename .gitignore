@@ -12,3 +12,5 @@ ai-service/samples/*.avi
 .DS_Store
 .idea/
 .vscode/
+uploads/
+backend/uploads/

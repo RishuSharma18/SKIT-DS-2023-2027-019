@@ -3,14 +3,18 @@ import ParkingSlot from '../models/ParkingSlot.js';
 import Watchlist from '../models/Watchlist.js';
 import Alert from '../models/Alert.js';
 import { recommendSlot } from './allocation.js';
+import { saveSnapshot } from './snapshot.js';
 
 async function raiseAlert(io, data) {
+  if (data.snapshot && typeof data.snapshot === 'string') {
+    data.snapshot = saveSnapshot(data.snapshot);
+  }
   const alert = await Alert.create(data);
   io.emit('alert:new', alert);
   return alert;
 }
 
-async function checkWatchlist(io, plate, cameraId, slotId) {
+async function checkWatchlist(io, plate, cameraId, slotId, snapshot) {
   if (!plate) return;
   const hit = await Watchlist.findOne({ plate, active: true });
   if (hit) {
@@ -21,6 +25,7 @@ async function checkWatchlist(io, plate, cameraId, slotId) {
       cameraId,
       slotId,
       message: `Watchlist match: ${plate} (${hit.reason})`,
+      snapshot: snapshot || null,
     });
   }
 }
@@ -31,7 +36,7 @@ async function emitSlots(io) {
 
 /**
  * Handles one event from the AI service.
- * type: entry | plate | parked | exit | wrong_parking | crash
+ * type: entry | plate | parked | exit | wrong_parking | crash | stolen_vehicle
  */
 export async function handleEvent(io, ev) {
   const { type, trackId, cameraId = 'cam-1', plate = null, vehicleType = 'car', slotId = null } = ev;
@@ -44,14 +49,14 @@ export async function handleEvent(io, ev) {
         entryTime: ev.timestamp ? new Date(ev.timestamp) : new Date(),
       });
       io.emit('session:new', session);
-      await checkWatchlist(io, plate, cameraId, null);
+      await checkWatchlist(io, plate, cameraId, null, ev.snapshot);
       return { session, recommendedSlot: rec ? rec.slotId : null };
     }
     case 'plate': {
       const session = await ParkingSession.findOneAndUpdate(
         { trackId, status: 'active' }, { plate }, { new: true, sort: { createdAt: -1 } }
       );
-      await checkWatchlist(io, plate, cameraId, session?.slotId ?? null);
+      await checkWatchlist(io, plate, cameraId, session?.slotId ?? null, ev.snapshot);
       if (session) io.emit('session:update', session);
       return { session };
     }
@@ -85,11 +90,19 @@ export async function handleEvent(io, ev) {
       return { alert: await raiseAlert(io, {
         type: 'wrong_parking', severity: 'medium', plate, cameraId, slotId,
         message: ev.message || 'Vehicle parked outside a valid slot / blocking path',
+        snapshot: ev.snapshot || null,
       }) };
     case 'crash':
       return { alert: await raiseAlert(io, {
         type: 'crash', severity: 'high', plate, cameraId,
-        message: ev.message || 'Possible collision detected', snapshot: ev.snapshot || null,
+        message: ev.message || 'Possible collision detected',
+        snapshot: ev.snapshot || null,
+      }) };
+    case 'stolen_vehicle':
+      return { alert: await raiseAlert(io, {
+        type: 'stolen_vehicle', severity: 'high', plate, cameraId, slotId,
+        message: ev.message || `Stolen vehicle detected${plate ? `: ${plate}` : ''}`,
+        snapshot: ev.snapshot || null,
       }) };
     default: {
       const err = new Error(`Unknown event type: ${type}`);

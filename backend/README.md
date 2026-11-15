@@ -7,12 +7,14 @@ Node.js + Express + MongoDB backend with Socket.IO for real-time CCTV parking te
 ```bash
 cd backend
 npm install
-npm run seed      # Seeds 12 demo slots + 2 watchlist plates
+npm run seed      # Seeds demo slots + watchlist plates
 npm run dev       # Starts server on http://localhost:5000 with nodemon
 npm run simulate  # Simulates live camera events (or node src/scripts/simulate.js)
 ```
 
-## REST API Endpoints
+## REST API Overview
+
+See [API.md](../docs/API.md) for full endpoint specifications, request bodies, and response examples.
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
@@ -20,11 +22,22 @@ npm run simulate  # Simulates live camera events (or node src/scripts/simulate.j
 | `GET` | `/api/stats` | Public | Real-time overview metrics: `totalSlots`, `freeSlots`, `occupied`, `activeVehicles`, `todayEntries`, `openAlerts` |
 | `GET` | `/api/analytics/hourly` | Public | Hourly entry count for today `[{hour: 0, entries: 0}, ...]` |
 | `GET` | `/api/slots` | Public | Full list of parking slots and status (`free`/`occupied`) |
-| `GET` | `/api/slots/recommend?vehicleType=car` | Public | Recommends nearest available slot for vehicle type (`bike`, `car`, `suv`) |
-| `GET` | `/api/sessions` | Public | List of parking sessions (active and past) |
-| `GET` | `/api/alerts` | Public | Security and safety alerts |
+| `GET` | `/api/slots/recommend?type=car` | Public | Recommends nearest available slot for vehicle type (`bike`, `car`, `suv`) |
+| `GET` | `/api/sessions` | Public | Filterable & paginated parking sessions (`?plate=RJ14&status=closed&page=1&limit=20`) |
+| `GET` | `/api/alerts` | Public | Filterable & paginated alerts (`?type=crash&acknowledged=false&page=1&limit=20`) |
 | `PATCH` | `/api/alerts/:id/ack` | Public | Acknowledge/dismiss an alert |
-| `POST` | `/api/events` | `x-api-key: dev-key` | AI event ingestion endpoint (validated) |
+| `GET` | `/api/watchlist` | Public | List of flagged license plates |
+| `POST` | `/api/watchlist` | Public | Add license plate to watchlist |
+| `DELETE` | `/api/watchlist/:id` | Public | Remove license plate from watchlist |
+| `POST` | `/api/events` | `x-api-key: dev-key` | AI event ingestion endpoint (supports base64 snapshots) |
+| `GET` | `/uploads/:filename` | Public | Statically serves saved snapshot images |
+
+## Pagination & Headers
+
+For `GET /api/sessions` and `GET /api/alerts`:
+- Responses return a standard JSON Array (`[...]`).
+- Total matching records are returned in the `X-Total-Count` response header.
+- CORS exposed headers include `X-Total-Count`.
 
 ## Overstay Detection
 
@@ -59,24 +72,35 @@ curl -X POST http://localhost:5000/api/events \
 ```bash
 curl -X POST http://localhost:5000/api/events \
   -H "x-api-key: dev-key" -H "Content-Type: application/json" \
-  -d '{"type":"wrong_parking","trackId":102,"plate":"RJ14XY9999","message":"Parked in restricted lane"}'
+  -d '{"type":"wrong_parking","trackId":102,"plate":"HR26DK2001","message":"Parked in restricted lane"}'
 ```
 
-### 5. `crash`
+### 5. `crash` (with base64 snapshot)
 ```bash
 curl -X POST http://localhost:5000/api/events \
   -H "x-api-key: dev-key" -H "Content-Type: application/json" \
-  -d '{"type":"crash","message":"Collision detected in Zone A aisle","cameraId":"cam-1"}'
+  -d '{"type":"crash","message":"Collision detected in Zone A aisle","cameraId":"cam-1","snapshot":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="}'
 ```
 
-### 6. `exit`
+### 6. `stolen_vehicle` (with base64 snapshot)
+```bash
+curl -X POST http://localhost:5000/api/events \
+  -H "x-api-key: dev-key" -H "Content-Type: application/json" \
+  -d '{"type":"stolen_vehicle","plate":"RJ14AB1234","message":"Stolen vehicle detected","cameraId":"cam-1","snapshot":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="}'
+```
+
+### 7. `exit`
 ```bash
 curl -X POST http://localhost:5000/api/events \
   -H "x-api-key: dev-key" -H "Content-Type: application/json" \
   -d '{"type":"exit","trackId":101}'
 ```
 
-### 7. Overview Statistics
+### 8. Filter Queries
 ```bash
-curl http://localhost:5000/api/stats
+# Filter closed sessions with plate RJ14
+curl -i "http://localhost:5000/api/sessions?plate=RJ14&status=closed&page=1&limit=20"
+
+# Filter unacknowledged crash alerts
+curl -i "http://localhost:5000/api/alerts?type=crash&acknowledged=false&page=1&limit=20"
 ```

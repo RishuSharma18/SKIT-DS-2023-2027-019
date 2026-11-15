@@ -1,4 +1,4 @@
-const VALID_EVENT_TYPES = ['entry', 'plate', 'parked', 'exit', 'wrong_parking', 'crash'];
+const VALID_EVENT_TYPES = ['entry', 'plate', 'parked', 'exit', 'wrong_parking', 'crash', 'stolen_vehicle'];
 const TRACK_ID_REQUIRED_TYPES = ['entry', 'plate', 'parked', 'exit', 'wrong_parking'];
 
 export default function validateEvent(req, res, next) {
@@ -8,7 +8,7 @@ export default function validateEvent(req, res, next) {
     return res.status(400).json({ error: 'Payload must be a JSON object' });
   }
 
-  const { type, trackId, slotId, plate, vehicleType } = ev;
+  const { type, trackId, slotId, plate, vehicleType, snapshot } = ev;
 
   if (!type || typeof type !== 'string' || !type.trim()) {
     return res.status(400).json({ error: 'Missing or empty required field: type' });
@@ -49,6 +49,12 @@ export default function validateEvent(req, res, next) {
   if (vehicleType && !['bike', 'car', 'suv'].includes(vehicleType)) {
     return res.status(400).json({
       error: `Invalid vehicleType: "${vehicleType}". Allowed values: bike, car, suv`,
+    });
+  }
+
+  if (snapshot !== undefined && snapshot !== null && typeof snapshot !== 'string') {
+    return res.status(400).json({
+      error: 'Field "snapshot" must be a base64 or URL string',
     });
   }
 
