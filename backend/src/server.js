@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import http from 'http';
 import { Server } from 'socket.io';
+import { WebSocketServer } from 'ws';
 import createApp from './app.js';
 import connectDB from './config/db.js';
 import { checkOverstays } from './services/events.js';
@@ -10,7 +11,38 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL || '*' },
 });
+const eventClients = new Set();
+const eventSocketServer = new WebSocketServer({ noServer: true });
+io.nativeWebSocketClients = eventClients;
 app.set('io', io);
+
+eventSocketServer.on('connection', (socket) => {
+  eventClients.add(socket);
+  socket.on('close', () => eventClients.delete(socket));
+  socket.on('error', () => eventClients.delete(socket));
+});
+
+server.on('upgrade', (request, socket, head) => {
+  let pathname;
+  try {
+    pathname = new URL(request.url, 'http://localhost').pathname;
+  } catch {
+    socket.destroy();
+    return;
+  }
+  if (pathname !== '/ws/events') return;
+
+  const allowedOrigin = process.env.CLIENT_URL;
+  const requestOrigin = request.headers.origin;
+  if (allowedOrigin && allowedOrigin !== '*' && requestOrigin && requestOrigin !== allowedOrigin) {
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  eventSocketServer.handleUpgrade(request, socket, head, (client) => {
+    eventSocketServer.emit('connection', client, request);
+  });
+});
 
 io.on('connection', (socket) => {
   console.log('dashboard connected', socket.id);

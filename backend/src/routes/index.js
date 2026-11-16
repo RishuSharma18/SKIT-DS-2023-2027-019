@@ -79,6 +79,22 @@ r.get('/slots/recommend', wrap(async (req, res) => {
   const slot = await recommendSlot(req.query.type || req.query.vehicleType || 'car', slotIds);
   res.json({ slot });
 }));
+r.post('/slots/allocate', wrap(async (req, res) => {
+  const category = String(req.body.vehicle_category || req.body.vehicleCategory || '').toUpperCase();
+  const categoryTypes = {
+    TWO_WHEELER: 'bike',
+    COMPACT_CAR: 'car',
+    SUV_SEDAN: 'suv',
+    HEAVY_VEHICLE: 'suv',
+  };
+  const vehicleType = categoryTypes[category] || req.body.vehicleType;
+  if (!['bike', 'car', 'suv'].includes(vehicleType)) {
+    const error = new Error('Provide a supported vehicle category.');
+    error.status = 400;
+    throw error;
+  }
+  res.json({ slot: await recommendSlot(vehicleType) });
+}));
 
 // ---- Sessions (check-in / check-out history)
 r.get('/sessions', wrap(async (req, res) => {
@@ -119,6 +135,23 @@ r.get('/sessions', wrap(async (req, res) => {
 // ---- Watchlist (simulated stolen-vehicle DB)
 r.get('/watchlist', wrap(async (req, res) => res.json(await Watchlist.find().sort({ createdAt: -1 }))));
 r.post('/watchlist', wrap(async (req, res) => res.status(201).json(await Watchlist.create(req.body))));
+r.put('/watchlist/:id', wrap(async (req, res) => {
+  const updates = {};
+  for (const key of ['plate', 'reason', 'active']) {
+    if (Object.hasOwn(req.body, key)) updates[key] = req.body[key];
+  }
+  const entry = await Watchlist.findByIdAndUpdate(
+    req.params.id,
+    updates,
+    { new: true, runValidators: true },
+  );
+  if (!entry) {
+    const error = new Error('Watchlist entry not found.');
+    error.status = 404;
+    throw error;
+  }
+  res.json(entry);
+}));
 r.delete('/watchlist/:id', wrap(async (req, res) => {
   await Watchlist.findByIdAndDelete(req.params.id);
   res.status(204).end();
