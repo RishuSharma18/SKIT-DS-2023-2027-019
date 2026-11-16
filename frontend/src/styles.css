@@ -187,11 +187,9 @@ h2 { margin: 0; color: #273448; font: 700 14px/1.35 'Segoe UI', sans-serif; lett
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(65px, 1fr)); gap: 8px; max-height: 246px; overflow: auto; padding: 1px 2px 3px 1px; }
 .slot { position: relative; display: flex; min-height: 78px; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; padding: 10px 9px 8px; border: 1px solid; border-radius: 7px; transition: transform .16s, box-shadow .16s; }
 .slot:hover { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(35,55,80,.08); }
-.slot.free { border-color: #d9eee5; background: var(--slot-free-surface); }
-.slot.occupied { border-color: #f2dddb; background: var(--slot-occupied-surface); }
-.slot.reserved { border-color: #f2e7d4; background: var(--slot-reserved-surface); }
-.slot.violation { border-color: #e6b8bf; background: #fff0f2; }
-.slot.unknown { border-color: var(--border); background: var(--field-surface); }
+.slot.free { border-color: #d9eee5; background: #f4fbf7; }
+.slot.occupied { border-color: #f2dddb; background: #fff7f6; }
+.slot.reserved { border-color: #f2e7d4; background: #fffaf2; }
 .slot-status-mark { position: absolute; top: 9px; right: 9px; color: #38a775; font-size: 9px; }
 .slot.occupied .slot-status-mark { color: #d76b65; }
 .slot.reserved .slot-status-mark { color: #d69a45; }
