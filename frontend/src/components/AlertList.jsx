@@ -12,6 +12,12 @@ const formatDate = (value) => {
   return Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 };
 
+const snapshotUrl = (snapshot) => {
+  if (!snapshot) return '';
+  if (/^https?:\/\//i.test(snapshot)) return snapshot;
+  return snapshot.startsWith('/') ? snapshot : `/${snapshot}`;
+};
+
 export default function AlertList({ alerts, onAck }) {
   const [type, setType] = useState('all');
   const [status, setStatus] = useState('open');
@@ -60,6 +66,12 @@ export default function AlertList({ alerts, onAck }) {
                   {alert.cameraId && <span>{alert.cameraId}</span>}
                   <time dateTime={alert.createdAt}>{formatDate(alert.createdAt)}</time>
                 </div>
+                {alert.snapshot && (
+                  <a className="alert-snapshot" href={snapshotUrl(alert.snapshot)} target="_blank" rel="noreferrer">
+                    <img src={snapshotUrl(alert.snapshot)} alt={`Camera snapshot for ${LABEL[alert.type] || alert.type}`} loading="lazy" />
+                    <span>View camera snapshot ↗</span>
+                  </a>
+                )}
               </div>
               {alert.acknowledged
                 ? <span className="acknowledged-label">Acknowledged</span>

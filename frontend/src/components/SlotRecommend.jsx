@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { recommendSlot } from '../api.js';
+import { predictDuration, recommendSlot } from '../api.js';
 
 const VEHICLES = [
   { value: 'bike', label: 'Motorcycle', icon: '◈' },
@@ -12,6 +12,9 @@ export default function SlotRecommend() {
   const [slot, setSlot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [duration, setDuration] = useState(null);
+  const [durationLoading, setDurationLoading] = useState(true);
+  const [durationError, setDurationError] = useState('');
   const [retry, setRetry] = useState(0);
   const selectedVehicle = VEHICLES.find((vehicle) => vehicle.value === type);
 
@@ -19,16 +22,32 @@ export default function SlotRecommend() {
     let current = true;
     setLoading(true);
     setError('');
-    recommendSlot(type)
-      .then((result) => {
-        if (current) setSlot(result.slot);
-      })
-      .catch((requestError) => {
-        if (current) setError(requestError.message);
-      })
-      .finally(() => {
-        if (current) setLoading(false);
-      });
+    setDurationLoading(true);
+    setDurationError('');
+    const now = new Date();
+    const weekday = (now.getDay() + 6) % 7;
+
+    Promise.allSettled([
+      recommendSlot(type),
+      predictDuration({ vehicleType: type, arrivalHour: now.getHours(), weekday }),
+    ]).then(([recommendationResult, durationResult]) => {
+      if (!current) return;
+      if (recommendationResult.status === 'fulfilled') {
+        setSlot(recommendationResult.value.slot);
+      } else {
+        setSlot(null);
+        setError(recommendationResult.reason.message);
+      }
+
+      if (durationResult.status === 'fulfilled') {
+        setDuration(durationResult.value.estimatedDurationMin);
+      } else {
+        setDuration(null);
+        setDurationError(durationResult.reason.message);
+      }
+      setLoading(false);
+      setDurationLoading(false);
+    });
     return () => { current = false; };
   }, [type, retry]);
 
@@ -60,6 +79,13 @@ export default function SlotRecommend() {
       ) : (
         <div className="recommendation-empty"><span aria-hidden="true">⌖</span><b>No matching space available</b><span>Try another vehicle type or check again later.</span></div>
       )}
+      <div className="duration-estimate" aria-live="polite">
+        <span className="duration-icon" aria-hidden="true">◷</span>
+        <div>
+          <b>{durationLoading ? 'Estimating stay…' : durationError ? 'Duration estimate unavailable' : duration ? `Estimated stay · ${duration} min` : 'No duration estimate'}</b>
+          <span>{durationError ? durationError : 'Prototype estimate from synthetic data; advisory only. Slot assignment still uses current allocation rules.'}</span>
+        </div>
+      </div>
     </>
   );
 }

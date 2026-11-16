@@ -9,13 +9,18 @@ export default function WatchlistPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
     getWatchlist()
-      .then(setEntries)
-      .catch((requestError) => setError(requestError.message))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((result) => { if (active) setEntries(result); })
+      .catch((requestError) => { if (active) setError(requestError.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [loadAttempt]);
 
   const onSubmit = async (event) => {
     event.preventDefault();
@@ -64,9 +69,13 @@ export default function WatchlistPanel() {
           <span aria-hidden="true">+</span> {saving ? 'Adding…' : 'Add vehicle'}
         </button>
       </form>
-      {error && <p className="error watchlist-error" role="alert">{error}</p>}
-      <div className="watchlist-list-heading"><span>FLAGGED VEHICLES</span><span className="watchlist-count">{loading ? '…' : entries.length}</span></div>
-      {loading ? <p className="muted list-loading">Loading watchlist…</p> : entries.length ? (
+      {error && entries.length > 0 && <p className="error watchlist-error" role="alert">{error} <button className="text-button" onClick={() => setLoadAttempt((current) => current + 1)}>Retry</button></p>}
+      <div className="watchlist-list-heading"><span>FLAGGED VEHICLES</span><span className="watchlist-count">{loading ? '…' : error && !entries.length ? '—' : entries.length}</span></div>
+      {loading ? (
+        <div className="panel-state watchlist-load-state" role="status"><span className="loading-spinner" aria-hidden="true" />Loading watchlist…</div>
+      ) : error && !entries.length ? (
+        <div className="panel-state panel-error" role="alert"><span>{error}</span><button className="text-button" onClick={() => setLoadAttempt((current) => current + 1)}>Try again</button></div>
+      ) : entries.length ? (
         <ul className="watchlist">
           {entries.map((entry) => (
             <li key={entry._id}>
