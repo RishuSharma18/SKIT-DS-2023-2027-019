@@ -1,0 +1,6 @@
+{
+  "trainingRows": 2000,
+  "testRows": 400,
+  "testMaeMin": 47.21,
+  "baselineMaeMin": 63.21
+}

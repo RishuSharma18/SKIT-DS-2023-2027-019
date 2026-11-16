@@ -45,20 +45,11 @@ export async function handleEvent(io, ev) {
   switch (type) {
     case 'entry': {
       const rec = await recommendSlot(vehicleType);
-      let session = await ParkingSession.findOne({ trackId, cameraId, status: 'active' }).sort({ createdAt: -1 });
-      if (session) {
-        session.plate = plate || session.plate;
-        session.vehicleType = vehicleType || session.vehicleType;
-        session.slotId = slotId || session.slotId;
-        await session.save();
-        emitRealtime(io, 'session:update', session);
-      } else {
-        session = await ParkingSession.create({
-          trackId, cameraId, plate, vehicleType, slotId,
-          entryTime: ev.timestamp ? new Date(ev.timestamp) : new Date(),
-        });
-        emitRealtime(io, 'session:new', session);
-      }
+      const session = await ParkingSession.create({
+        trackId, cameraId, plate, vehicleType,
+        entryTime: ev.timestamp ? new Date(ev.timestamp) : new Date(),
+      });
+      emitRealtime(io, 'session:new', session);
       await checkWatchlist(io, plate, cameraId, null, ev.snapshot);
       return { session, recommendedSlot: rec ? rec.slotId : null };
     }
