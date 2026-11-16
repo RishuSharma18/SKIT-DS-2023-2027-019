@@ -86,6 +86,57 @@ export async function handleEvent(io, ev) {
       io.emit('session:update', session);
       return { session };
     }
+    case 'occupancy': {
+      const slotIds = ev.slots.map((slot) => slot.slotId);
+      if (ev.sourceMode === 'video') {
+        io.emit('camera:occupancy', {
+          cameraId,
+          slots: ev.slots,
+          slotIds,
+          occupiedSlotIds: ev.occupiedSlotIds,
+          sourceMode: ev.sourceMode,
+        });
+        return { slots: slotIds, persisted: false };
+      }
+
+      const occupiedSlotIds = new Set(ev.occupiedSlotIds);
+      const currentSlots = await ParkingSlot.find({ slotId: { $in: slotIds } });
+      const currentById = new Map(currentSlots.map((slot) => [slot.slotId, slot]));
+      const slotsById = new Map(ev.slots.map((slot) => [slot.slotId, slot]));
+      const updates = slotIds.flatMap((id) => {
+        const current = currentById.get(id);
+        const occupied = occupiedSlotIds.has(id);
+        if (current && !occupied && current.status === 'reserved') return [];
+        if (current && current.status === (occupied ? 'occupied' : 'free')
+            && (occupied || current.currentSession == null)) return [];
+
+        const slot = slotsById.get(id);
+        const update = {
+          $setOnInsert: {
+            slotId: id,
+            zone: id.includes('-') ? id.slice(0, id.lastIndexOf('-')) : 'A',
+            type: slot.type,
+            cameraId,
+          },
+          $set: { status: occupied ? 'occupied' : 'free' },
+        };
+        if (occupied) update.$setOnInsert.currentSession = null;
+        else update.$set.currentSession = null;
+        return [{ updateOne: { filter: { slotId: id }, update, upsert: true } }];
+      });
+      if (updates.length) {
+        await ParkingSlot.bulkWrite(updates);
+        await emitSlots(io);
+      }
+      io.emit('camera:occupancy', {
+        cameraId,
+        slots: ev.slots,
+        slotIds,
+        occupiedSlotIds: ev.occupiedSlotIds,
+        sourceMode: ev.sourceMode,
+      });
+      return { slots: slotIds, persisted: true };
+    }
     case 'wrong_parking':
       return { alert: await raiseAlert(io, {
         type: 'wrong_parking', severity: 'medium', plate, cameraId, slotId,
@@ -95,6 +146,7 @@ export async function handleEvent(io, ev) {
     case 'crash':
       return { alert: await raiseAlert(io, {
         type: 'crash', severity: 'high', plate, cameraId,
+        trackIds: ev.trackIds || [],
         message: ev.message || 'Possible collision detected',
         snapshot: ev.snapshot || null,
       }) };

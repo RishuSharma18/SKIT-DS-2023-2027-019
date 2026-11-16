@@ -7,7 +7,7 @@ const VEHICLES = [
   { value: 'suv', label: 'SUV', icon: '▰' },
 ];
 
-export default function SlotRecommend() {
+export default function SlotRecommend({ slotIds = [], enabled = false }) {
   const [type, setType] = useState('car');
   const [slot, setSlot] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -28,7 +28,7 @@ export default function SlotRecommend() {
     const weekday = (now.getDay() + 6) % 7;
 
     Promise.allSettled([
-      recommendSlot(type),
+      enabled ? recommendSlot(type, slotIds) : Promise.resolve({ slot: null }),
       predictDuration({ vehicleType: type, arrivalHour: now.getHours(), weekday }),
     ]).then(([recommendationResult, durationResult]) => {
       if (!current) return;
@@ -49,7 +49,7 @@ export default function SlotRecommend() {
       setDurationLoading(false);
     });
     return () => { current = false; };
-  }, [type, retry]);
+  }, [enabled, slotIds, type, retry]);
 
   return (
     <>
@@ -57,7 +57,7 @@ export default function SlotRecommend() {
         <div><p className="eyebrow">SMART ALLOCATION</p><h2>Find the right space</h2></div>
         <span className="recommend-icon" aria-hidden="true">✦</span>
       </div>
-      <p className="recommend-copy">Get the best available slot based on your vehicle type.</p>
+      <p className="recommend-copy">{enabled ? 'Get the best available mapped space for your vehicle.' : 'Live recommendations appear when a camera and verified space map are connected.'}</p>
       <span className="vehicle-label">SELECT VEHICLE</span>
       <div className="vehicle-options" role="group" aria-label="Vehicle type">
         {VEHICLES.map((vehicle) => (
@@ -70,6 +70,8 @@ export default function SlotRecommend() {
         <div className="recommendation-state"><span className="loading-spinner" />Finding the best available space…</div>
       ) : error ? (
         <div className="recommendation-error" role="alert"><span>{error}</span><button className="text-button" onClick={() => setRetry((current) => current + 1)}>Try again</button></div>
+      ) : !enabled ? (
+        <div className="recommendation-empty"><span aria-hidden="true">⌖</span><b>Live recommendation unavailable</b><span>Saved or demo slot data is not used to recommend a real space.</span></div>
       ) : slot ? (
         <div className="recommendation">
           <div className="recommendation-top"><span className="recommend-success"><span className="status-dot online" /> BEST MATCH</span><span className="vehicle-chip">{selectedVehicle?.label}</span></div>

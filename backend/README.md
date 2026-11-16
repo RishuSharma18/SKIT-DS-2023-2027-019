@@ -75,11 +75,11 @@ curl -X POST http://localhost:5000/api/events \
   -d '{"type":"wrong_parking","trackId":102,"plate":"HR26DK2001","message":"Parked in restricted lane"}'
 ```
 
-### 5. `crash` (with base64 snapshot)
+### 5. `crash` (optional track IDs and base64 snapshot)
 ```bash
 curl -X POST http://localhost:5000/api/events \
   -H "x-api-key: dev-key" -H "Content-Type: application/json" \
-  -d '{"type":"crash","message":"Collision detected in Zone A aisle","cameraId":"cam-1","snapshot":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="}'
+  -d '{"type":"crash","trackIds":[12,34],"message":"Collision detected in Zone A aisle","cameraId":"cam-1","snapshot":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="}'
 ```
 
 ### 6. `stolen_vehicle` (with base64 snapshot)

@@ -12,6 +12,19 @@ import PanelState from './components/PanelState.jsx';
 import WatchlistPanel from './components/WatchlistPanel.jsx';
 
 const formatUpdated = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const hasCameraMapHealth = (health) => {
+  if (!health
+      || typeof health.cameraId !== 'string'
+      || !health.cameraId.trim()
+      || !['video', 'webcam', 'network'].includes(health.sourceMode)
+      || !Array.isArray(health.configuredSlotIds)
+      || !Array.isArray(health.configuredSlots)) {
+    return false;
+  }
+  const slotIds = health.configuredSlots.map((slot) => slot?.slotId);
+  return slotIds.length === health.configuredSlotIds.length
+    && health.configuredSlotIds.every((slotId) => slotIds.includes(slotId));
+};
 const INITIAL_PANEL_STATES = {
   slots: { loading: true, error: '' },
   alerts: { loading: true, error: '' },
@@ -30,11 +43,18 @@ export default function App() {
   const [panelStates, setPanelStates] = useState(INITIAL_PANEL_STATES);
   const [actionError, setActionError] = useState('');
   const [connection, setConnection] = useState('disconnected');
+  const [cameraOccupancy, setCameraOccupancy] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [feedAvailable, setFeedAvailable] = useState(true);
   const [feedLoading, setFeedLoading] = useState(true);
   const [backendHealth, setBackendHealth] = useState({ status: 'loading' });
-  const [aiHealth, setAiHealth] = useState({ status: 'loading', ocrEnabled: false, durationModelAvailable: false });
+  const [aiHealth, setAiHealth] = useState({
+    status: 'loading',
+    ocrEnabled: false,
+    durationModelAvailable: false,
+    configuredSlotIds: [],
+    configuredSlots: [],
+  });
   const [theme, setTheme] = useState(() => {
     try {
       return window.localStorage.getItem('parkwise-theme') === 'dark' ? 'dark' : 'light';
@@ -79,12 +99,30 @@ export default function App() {
       : { status: 'offline', error: backendResult.reason.message });
     setAiHealth(aiResult.status === 'fulfilled'
       ? {
-        status: 'online',
+        status: hasCameraMapHealth(aiResult.value) ? 'online' : 'outdated',
+        error: hasCameraMapHealth(aiResult.value)
+          ? undefined
+          : 'The AI service is responding with an outdated health API. Restart it from this project checkout.',
         ocrEnabled: aiResult.value.ocrEnabled,
         durationModelAvailable: aiResult.value.durationModelAvailable,
         durationModelMetrics: aiResult.value.durationModelMetrics,
+        cameraId: aiResult.value.cameraId,
+        sourceMode: aiResult.value.sourceMode,
+        configuredSlotIds: aiResult.value.configuredSlotIds || [],
+        configuredSlots: aiResult.value.configuredSlots || [],
+        slotConfigError: aiResult.value.slotConfigError,
+        inferenceImageSize: aiResult.value.inferenceImageSize,
+        confidence: aiResult.value.confidence,
+        tiledInference: aiResult.value.tiledInference,
       }
-      : { status: 'offline', ocrEnabled: false, durationModelAvailable: false, error: aiResult.reason.message });
+      : {
+        status: 'offline',
+        ocrEnabled: false,
+        durationModelAvailable: false,
+        configuredSlotIds: [],
+        configuredSlots: [],
+        error: aiResult.reason.message,
+      });
   }, []);
 
   useEffect(() => {
@@ -105,6 +143,9 @@ export default function App() {
     socket.on('connect', () => setConnection('connected'));
     socket.on('disconnect', () => setConnection('disconnected'));
     socket.on('connect_error', () => setConnection('disconnected'));
+    socket.on('camera:occupancy', (occupancy) => {
+      setCameraOccupancy({ ...occupancy, receivedAt: Date.now() });
+    });
     socket.on('slots:update', (nextSlots) => {
       setSlots(nextSlots);
       setPanelStates((current) => ({ ...current, slots: { loading: false, error: '' } }));
@@ -136,14 +177,75 @@ export default function App() {
     };
   }, [loadDashboard, refreshHealth]);
 
-  const free = slots.filter((slot) => slot.status === 'free').length;
-  const occupied = slots.filter((slot) => slot.status === 'occupied').length;
-  const active = sessions.filter((session) => session.status === 'active').length;
+  const configuredSlotIds = aiHealth.configuredSlotIds || [];
+  const configuredSlots = configuredSlotIds.length
+    ? slots.filter((slot) => configuredSlotIds.includes(slot.slotId))
+    : [];
   const open = alerts.filter((alert) => !alert.acknowledged).length;
   const slotsUnavailable = panelStates.slots.loading || Boolean(panelStates.slots.error);
   const alertsUnavailable = panelStates.alerts.loading || Boolean(panelStates.alerts.error);
   const statsUnavailable = panelStates.stats.loading || Boolean(panelStates.stats.error);
-  const summaryOpen = statsUnavailable ? open : stats?.openAlerts ?? open;
+  const isVideoReplay = aiHealth.status === 'online' && aiHealth.sourceMode === 'video';
+  const configuredSlotsPresent = configuredSlotIds.length > 0
+    && configuredSlots.length === configuredSlotIds.length;
+  const cameraMapSynced = cameraOccupancy?.cameraId === aiHealth.cameraId
+    && cameraOccupancy?.sourceMode === aiHealth.sourceMode
+    && configuredSlotIds.length > 0
+    && Array.isArray(cameraOccupancy?.slotIds)
+    && Array.isArray(cameraOccupancy?.occupiedSlotIds)
+    && Array.isArray(cameraOccupancy?.slots)
+    && configuredSlotIds.every((slotId) => cameraOccupancy.slotIds.includes(slotId));
+  const occupancyFresh = cameraMapSynced
+    && connection === 'connected'
+    && Date.now() - cameraOccupancy.receivedAt < 15_000;
+  const liveOccupancyVerified = aiHealth.status === 'online'
+    && backendHealth.status === 'online'
+    && ['webcam', 'network'].includes(aiHealth.sourceMode)
+    && configuredSlotsPresent
+    && occupancyFresh
+    && !slotsUnavailable
+    && feedAvailable
+    && !feedLoading;
+  const replayOccupancyAvailable = aiHealth.status === 'online'
+    && backendHealth.status === 'online'
+    && isVideoReplay
+    && occupancyFresh
+    && !slotsUnavailable
+    && feedAvailable
+    && !feedLoading;
+  const occupancyVerified = liveOccupancyVerified || replayOccupancyAvailable;
+  const occupiedSlotIds = new Set(cameraOccupancy?.occupiedSlotIds || []);
+  const configuredSlotDefinitions = new Map(
+    (aiHealth.configuredSlots || []).map((slot) => [slot.slotId, slot])
+  );
+  const cameraDisplaySlots = configuredSlotIds.map((slotId) => {
+    const savedSlot = configuredSlots.find((slot) => slot.slotId === slotId);
+    const configured = configuredSlotDefinitions.get(slotId);
+    return {
+      ...savedSlot,
+      slotId,
+      type: savedSlot?.type || configured?.type || 'car',
+      status: !occupancyVerified
+        ? 'unknown'
+        : occupiedSlotIds.has(slotId)
+          ? 'occupied'
+          : savedSlot?.status === 'reserved' && liveOccupancyVerified
+            ? 'reserved'
+            : 'free',
+    };
+  });
+  const free = cameraDisplaySlots.filter((slot) => slot.status === 'free').length;
+  const occupied = cameraDisplaySlots.filter((slot) => slot.status === 'occupied').length;
+  const summaryOpen = liveOccupancyVerified
+    ? (statsUnavailable ? open : stats?.openAlerts ?? open)
+    : 0;
+  const cameraSourceLabel = isVideoReplay
+    ? 'VIDEO REPLAY'
+    : aiHealth.sourceMode === 'webcam'
+      ? 'WEBCAM'
+      : aiHealth.sourceMode === 'network'
+        ? 'IP CAMERA'
+        : 'CAMERA';
 
   const onAck = async (id) => {
     setActionError('');
@@ -168,14 +270,14 @@ export default function App() {
         <nav className="side-nav" aria-label="Dashboard sections">
           <a className="side-link active" href="#overview"><span aria-hidden="true">▦</span> Overview</a>
           <a className="side-link" href="#parking"><span aria-hidden="true">⌖</span> Parking</a>
-          <a className="side-link" href="#alerts"><span aria-hidden="true">◉</span> Alerts{open > 0 && <span className="nav-count">{open}</span>}</a>
+          <a className="side-link" href="#alerts"><span aria-hidden="true">◉</span> Alerts{summaryOpen > 0 && <span className="nav-count">{summaryOpen}</span>}</a>
           <a className="side-link" href="#watchlist"><span aria-hidden="true">☆</span> Watchlist</a>
           <a className="side-link" href="#activity"><span aria-hidden="true">↗</span> Activity</a>
         </nav>
         <div className="sidebar-bottom">
           <div className="system-card">
-            <span className={`status-dot ${connection === 'connected' ? 'online' : ''}`} />
-            <div><b>System status</b><span>{connection === 'connected' ? 'All systems operational' : connection === 'connecting' ? 'Connecting to server…' : 'Live updates unavailable'}</span></div>
+            <span className={`status-dot ${connection === 'connected' && !isVideoReplay ? 'online' : ''}`} />
+            <div><b>System status</b><span>{isVideoReplay ? 'Video replay mode' : connection === 'connected' ? 'All systems operational' : connection === 'connecting' ? 'Connecting to server…' : 'Live updates unavailable'}</span></div>
           </div>
           <div className="sidebar-foot">PARKING OPERATIONS <span>v1.0</span></div>
         </div>
@@ -186,7 +288,7 @@ export default function App() {
           <div className="breadcrumb">Workspace <span>/</span> <b>Overview</b></div>
           <div className="topbar-right">
             <div className={`live-badge ${connection}`} role="status" aria-live="polite">
-              <span className="status-dot" />{connection === 'connected' ? 'Live' : 'Disconnected'}
+              <span className="status-dot" />{connection === 'connected' ? isVideoReplay ? 'Replay' : 'Live' : 'Disconnected'}
             </div>
             <button className="theme-toggle" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
               <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span><span className="theme-toggle-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
@@ -201,7 +303,7 @@ export default function App() {
             <div>
               <p className="eyebrow">PARKING OPERATIONS</p>
               <h1>Good day, operator <span aria-hidden="true">✦</span></h1>
-              <p className="page-subtitle">A live view of your parking facility and vehicle safety.</p>
+              <p className="page-subtitle">Camera detections and configured parking-space status.</p>
             </div>
             <div className="heading-actions">
               <span className="updated-label">{lastUpdated ? `Updated ${formatUpdated(lastUpdated)}` : 'Waiting for data'}</span>
@@ -212,6 +314,33 @@ export default function App() {
           </section>
 
           <ServiceHealth backend={backendHealth} ai={aiHealth} socket={connection} camera={feedLoading ? 'loading' : feedAvailable ? 'online' : 'offline'} />
+          {aiHealth.status === 'outdated' && (
+            <div className="notice source-notice restart-notice" role="alert">
+              <b>AI service needs a restart</b>
+              <p>The service on port 8001 is responding, but it is an older version that does not report the configured parking map.</p>
+              <p>1. In the terminal running the AI service, press <kbd>Ctrl</kbd>+<kbd>C</kbd>.</p>
+              <p>2. Open a new PowerShell terminal and run:</p>
+              <pre><code>{'Set-Location "C:\\Users\\SUNIL KUMAR\\Desktop\\smart-cctv-parking\\ai-service"\n& .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001'}</code></pre>
+              <p>Leave that terminal open, then refresh this dashboard.</p>
+            </div>
+          )}
+          {aiHealth.status === 'online' && (!occupancyVerified || isVideoReplay) && (
+            <div className="notice source-notice" role="status">
+              {isVideoReplay && replayOccupancyAvailable
+                ? `VIDEO REPLAY: showing detection-based estimates for ${configuredSlotIds.length} mapped bays only. This is prerecorded sample footage, not live parking availability.`
+                : isVideoReplay
+                ? `VIDEO REPLAY: ${aiHealth.cameraId || 'This source'} is prerecorded, not live CCTV. Waiting for a recent occupancy update; mapped bays are shown as unverified. ${configuredSlotIds.length} spaces are mapped from this clip, not your actual facility.`
+                : aiHealth.slotConfigError
+                  ? `Parking map could not be loaded: ${aiHealth.slotConfigError}`
+                  : configuredSlotIds.length && !configuredSlotsPresent
+                    ? `Parking occupancy is hidden: ${configuredSlotIds.length} camera spaces are configured, but only ${configuredSlots.length} are registered in the backend.`
+                    : !cameraMapSynced && configuredSlotsPresent
+                      ? 'Waiting for the live camera to confirm its mapped-space occupancy; saved statuses stay hidden until then.'
+                      : backendHealth.status !== 'online'
+                        ? 'Backend unavailable; live parking status cannot be verified.'
+                        : 'Live occupancy is hidden until a webcam or network camera and its matching parking-space map are connected.'}
+            </div>
+          )}
           {panelStates.stats.error && (
             <div className="notice error-notice stats-notice" role="alert">
               <span>Summary metrics unavailable: {panelStates.stats.error}</span>
@@ -222,23 +351,23 @@ export default function App() {
           <section className="stats-grid" aria-label="Facility summary">
             <article className="stat-card stat-green">
               <div className="stat-top"><span>AVAILABLE SPACES</span><span className="stat-icon">⌖</span></div>
-              <div className="stat-value">{statsUnavailable ? (slotsUnavailable ? '—' : free) : stats?.freeSlots}<small> / {statsUnavailable ? (slotsUnavailable ? '—' : slots.length) : stats?.totalSlots}</small></div>
-              <div className="stat-foot"><span className={`mini-dot ${slotsUnavailable ? 'amber-dot' : 'green-dot'}`} />{slotsUnavailable ? 'Slot availability unavailable' : 'Ready for incoming vehicles'}</div>
+              <div className="stat-value">{occupancyVerified ? free : '—'}<small> / {configuredSlotIds.length || '—'}</small></div>
+              <div className="stat-foot"><span className={`mini-dot ${occupancyVerified ? 'green-dot' : 'amber-dot'}`} />{occupancyVerified ? replayOccupancyAvailable ? 'Sample replay estimate · not live' : 'Available mapped camera spaces' : `${configuredSlotIds.length} spaces mapped; status unverified`}</div>
             </article>
             <article className="stat-card stat-blue">
-              <div className="stat-top"><span>VEHICLES INSIDE</span><span className="stat-icon">↗</span></div>
-              <div className="stat-value">{statsUnavailable ? (panelStates.sessions.loading || panelStates.sessions.error ? '—' : active) : stats?.activeVehicles}</div>
-              <div className="stat-foot"><span className="mini-dot blue-dot" />{slotsUnavailable ? 'Occupancy unavailable' : `${occupied} parking ${occupied === 1 ? 'space' : 'spaces'} occupied`}</div>
+              <div className="stat-top"><span>OCCUPIED MAPPED SPACES</span><span className="stat-icon">↗</span></div>
+              <div className="stat-value">{occupancyVerified ? occupied : '—'}</div>
+              <div className="stat-foot"><span className="mini-dot blue-dot" />{occupancyVerified ? replayOccupancyAvailable ? 'Detected occupied bays · replay' : 'Current camera occupancy' : 'Requires a camera and mapped spaces'}</div>
             </article>
-            <article className={`stat-card ${summaryOpen ? 'stat-amber' : 'stat-green'}`}>
-              <div className="stat-top"><span>OPEN ALERTS</span><span className="stat-icon">⚑</span></div>
-              <div className="stat-value">{statsUnavailable ? (panelStates.alerts.loading || panelStates.alerts.error ? '—' : open) : stats?.openAlerts}</div>
-              <div className="stat-foot"><span className={`mini-dot ${alertsUnavailable || summaryOpen ? 'amber-dot' : 'green-dot'}`} />{alertsUnavailable ? 'Alert status unavailable' : summaryOpen ? 'Needs operator attention' : 'You’re all caught up'}</div>
+            <article className={`stat-card ${!liveOccupancyVerified || summaryOpen ? 'stat-amber' : 'stat-green'}`}>
+              <div className="stat-top"><span>SAVED OPEN ALERTS</span><span className="stat-icon">⚑</span></div>
+              <div className="stat-value">{liveOccupancyVerified ? (statsUnavailable || alertsUnavailable ? '—' : stats?.openAlerts ?? open) : '—'}</div>
+              <div className="stat-foot"><span className={`mini-dot ${!liveOccupancyVerified || alertsUnavailable || summaryOpen ? 'amber-dot' : 'green-dot'}`} />{!liveOccupancyVerified ? 'Current camera alerts not verified' : alertsUnavailable ? 'Alert history unavailable' : summaryOpen ? 'Saved alerts need review' : 'No saved open alerts'}</div>
             </article>
             <article className="stat-card stat-violet">
               <div className="stat-top"><span>TODAY’S ENTRIES</span><span className="stat-icon">↗</span></div>
-              <div className="stat-value">{statsUnavailable ? '—' : stats?.todayEntries ?? '—'}</div>
-              <div className="stat-foot"><span className="mini-dot violet-dot" />{statsUnavailable ? 'Daily count unavailable' : 'Vehicles checked in today'}</div>
+              <div className="stat-value">{liveOccupancyVerified && !statsUnavailable ? stats?.todayEntries ?? '—' : '—'}</div>
+              <div className="stat-foot"><span className="mini-dot violet-dot" />{liveOccupancyVerified ? 'Backend entries saved today' : 'Current camera entries not verified'}</div>
             </article>
           </section>
 
@@ -246,10 +375,10 @@ export default function App() {
             <section className="panel camera-panel">
               <div className="panel-heading">
                 <div><p className="eyebrow">CAMERA MONITORING</p><h2>Live camera feed</h2></div>
-                <span className="camera-tag"><span className="status-dot" /> CAM 01</span>
+                <span className="camera-tag"><span className="status-dot" /> {cameraSourceLabel} · {aiHealth.cameraId || 'cam-1'}</span>
               </div>
               <div className="camera-view">
-                {feedAvailable && <img className={feedLoading ? 'feed-image is-loading' : 'feed-image'} src="http://localhost:8000/stream" alt="Live parking CCTV feed" onLoad={() => setFeedLoading(false)} onError={() => { setFeedAvailable(false); setFeedLoading(false); }} />}
+                {feedAvailable && <img className={feedLoading ? 'feed-image is-loading' : 'feed-image'} src="/ai/stream" alt={isVideoReplay ? 'Prerecorded parking video with vehicle detections' : 'Parking camera feed with vehicle detections'} onLoad={() => setFeedLoading(false)} onError={() => { setFeedAvailable(false); setFeedLoading(false); }} />}
                 {feedLoading ? (
                   <div className="feed-placeholder feed-loading-placeholder" role="status"><span className="loading-spinner" aria-hidden="true" /><b>Connecting to camera…</b><span>Starting the live video stream.</span></div>
                 ) : !feedAvailable ? (
@@ -257,33 +386,36 @@ export default function App() {
                     <span className="camera-placeholder-icon" aria-hidden="true">▣</span>
                     <b>Camera feed is offline</b>
                     <span>Start the AI service to view the live stream.</span>
-                    <button className="feed-retry" onClick={() => { setFeedAvailable(true); setFeedLoading(true); }}>Retry connection</button>
+                    <button className="feed-retry" onClick={() => { setCameraOccupancy(null); setFeedAvailable(true); setFeedLoading(true); }}>Retry connection</button>
                   </div>
                 ) : null}
-                {feedAvailable && !feedLoading && <span className="feed-live"><span className="status-dot" /> LIVE</span>}
+                {feedAvailable && !feedLoading && <span className="feed-live"><span className={`status-dot ${isVideoReplay ? 'replay-dot' : ''}`} /> {isVideoReplay ? 'VIDEO REPLAY' : 'LIVE'}</span>}
               </div>
-              <div className="camera-caption"><span><span className={`status-dot ${connection === 'connected' ? 'online' : ''}`} />{connection === 'connected' ? 'Connected to facility' : 'Waiting for facility connection'}</span><span>AI-powered monitoring</span></div>
+              <div className="camera-caption"><span><span className={`status-dot ${connection === 'connected' && !isVideoReplay ? 'online' : ''}`} />{isVideoReplay ? 'Recorded video playback' : connection === 'connected' ? 'Connected to facility' : 'Waiting for facility connection'}</span><span>AI-powered monitoring</span></div>
             </section>
 
             <section className="panel slots-panel" id="parking">
               <div className="panel-heading">
-                <div><p className="eyebrow">FACILITY MAP</p><h2>Parking availability</h2></div>
-                <a className="subtle-link" href="#recommend">Find a spot <span aria-hidden="true">→</span></a>
+                <div><p className="eyebrow">CAMERA MAP</p><h2>Mapped parking spaces</h2></div>
+                <div className="slot-panel-actions">
+                  <span className="panel-meta">{replayOccupancyAvailable ? 'Sample replay · not live' : `${configuredSlotIds.length} camera-mapped spaces`}</span>
+                  {liveOccupancyVerified && <a className="subtle-link" href="#recommend">Find a spot <span aria-hidden="true">→</span></a>}
+                </div>
               </div>
               <div className="slot-summary">
-                <span><i className="legend-dot free-legend" />Free <b>{slotsUnavailable ? '—' : free}</b></span>
-                <span><i className="legend-dot occupied-legend" />Occupied <b>{slotsUnavailable ? '—' : occupied}</b></span>
-                <span><i className="legend-dot reserved-legend" />Reserved <b>{slotsUnavailable ? '—' : slots.filter((slot) => slot.status === 'reserved').length}</b></span>
+                <span><i className="legend-dot free-legend" />Free <b>{occupancyVerified ? free : '—'}</b></span>
+                <span><i className="legend-dot occupied-legend" />Occupied <b>{occupancyVerified ? occupied : '—'}</b></span>
+                <span><i className="legend-dot reserved-legend" />Reserved <b>{occupancyVerified ? cameraDisplaySlots.filter((slot) => slot.status === 'reserved').length : '—'}</b></span>
               </div>
               <PanelState loading={panelStates.slots.loading} error={panelStates.slots.error} onRetry={() => loadDashboard(['slots'])}>
-                <SlotGrid slots={slots} />
+                <SlotGrid slots={cameraDisplaySlots} verified={occupancyVerified} />
               </PanelState>
             </section>
 
             <section className="panel traffic-panel">
               <div className="panel-heading">
                 <div><p className="eyebrow">ARRIVAL TRENDS</p><h2>Today’s vehicle activity</h2></div>
-                <span className="panel-meta">Hourly entries · local time</span>
+                <span className="panel-meta">{isVideoReplay ? 'Saved history · may include prior demo runs' : 'Hourly saved entries · local time'}</span>
               </div>
               <PanelState loading={panelStates.analytics.loading} error={panelStates.analytics.error} onRetry={() => loadDashboard(['analytics'])}>
                 <HourlyTraffic data={hourly} />
@@ -301,13 +433,13 @@ export default function App() {
             </section>
 
             <section className="panel recommendation-panel" id="recommend">
-              <SlotRecommend />
+              <SlotRecommend slotIds={configuredSlotIds} enabled={liveOccupancyVerified} />
             </section>
 
             <section className="panel alerts-panel" id="alerts">
               <div className="panel-heading">
-                <div><p className="eyebrow">SAFETY &amp; SECURITY</p><h2>Recent alerts {open > 0 && <span className="heading-count">{open}</span>}</h2></div>
-                <span className="panel-meta">Latest first</span>
+                <div><p className="eyebrow">SAFETY &amp; SECURITY</p><h2>Recent saved alerts {liveOccupancyVerified && open > 0 && <span className="heading-count">{open}</span>}</h2></div>
+                <span className="panel-meta">{isVideoReplay ? 'Saved history · origin may be unknown' : 'Latest first'}</span>
               </div>
               {actionError && <p className="error inline-error" role="alert">{actionError}</p>}
               <PanelState loading={panelStates.alerts.loading} error={panelStates.alerts.error} onRetry={() => loadDashboard(['alerts'])}>

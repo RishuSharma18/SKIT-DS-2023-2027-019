@@ -38,12 +38,13 @@ npm run dev           # http://localhost:5000/api/health
 # 3. frontend (terminal 2)
 cd frontend
 npm install
-npm run dev           # http://localhost:5173
+npm run dev           # http://localhost:5173; proxies AI requests to port 8001
 
 # 4. ai-service (terminal 3)
 cd ai-service
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate                             # Windows Git Bash: source .venv/Scripts/activate
+python -m pip install -r requirements.txt
 # Train the optional duration-estimation prototype used by the dashboard.
 python ml/generate_data.py
 python ml/train_duration_model.py
@@ -51,11 +52,13 @@ python ml/train_duration_model.py
 # Record or download a parking video to samples/parking.mp4 (video files are gitignored).
 # Use tools/draw_slots.py to draw slot polygons for that video before running the pipeline.
 python tools/draw_slots.py --source samples/parking.mp4 --out config/slots.json
-python tools/detect_demo.py --source samples/parking.mp4
-# Review boxes and IDs; optionally retry with --conf 0.3 to compare detection sensitivity.
-# If the printed largest-gap suggestion matches cars vs SUVs in your footage, tune SUV_AREA_RATIO in .env.
-python run_pipeline.py --show                          # dev window, press q to quit
-uvicorn app.main:app --port 8000                       # or: serve /stream for the dashboard
+python tools/detect_demo.py --source samples/parking.mp4 --imgsz 1280 --conf 0.25
+# Larger imgsz can find more distant/small vehicles but is slower; compare with --imgsz 640.
+# Review boxes and IDs; tune CONFIDENCE and YOLO_IMAGE_SIZE in .env for your camera.
+# Run the AI API in this terminal for the dashboard camera stream and health checks:
+uvicorn app.main:app --host 127.0.0.1 --port 8001
+# For a standalone local preview instead, stop Uvicorn and run:
+python run_pipeline.py --show
 ```
 
 On Windows PowerShell, the equivalent AI-service setup is:
@@ -73,15 +76,47 @@ New-Item -ItemType Directory -Force samples | Out-Null
 # Put your parking video at samples\parking.mp4, then:
 python tools\draw_slots.py --source samples\parking.mp4 --out config\slots.json
 python tools\detect_demo.py --source samples\parking.mp4
-python run_pipeline.py --show
+# For dashboard integration, run the AI API on port 8001:
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
-The slot polygons must be drawn on the actual video frame; the committed slot coordinates are examples,
-not calibrated coordinates for your camera. Work with the dashboard owner to agree on the parking-slot
-layout and vehicle types before saving `config/slots.json`. In COCO, YOLO labels motorcycles as `bike`,
-cars as `car`, and buses/trucks as `suv`; SUV detection is an approximation based on those classes and
-the configurable bounding-box area ratio, not a dedicated SUV class. Disable OCR in `.env` with
-`ENABLE_OCR=0` for detection-only runs when EasyOCR is not needed.
+The current `ai-service/config/slots.json` maps five marked car spaces from the included sample video's
+3840x2160 frame; it is only suitable for that same fixed camera and frame geometry, not a confirmed
+physical facility. The dashboard identifies prerecorded input as video replay and hides live counts
+and recommendations until a webcam or network camera and matching spaces are configured. It only
+displays the spaces mapped by the active camera; occupancy is refreshed from detections in those bays.
+For a live camera, missing mapped slots are registered and their status is synchronized; unrelated
+slots are left alone. Sample-video occupancy is broadcast as a temporary estimate and is not saved,
+and replay-generated sessions and alerts are disabled.
+YOLO's COCO classes include motorcycle and car (SUVs are included in car); COCO cannot reliably
+distinguish an SUV from another car. A separately trained classifier is needed for that distinction.
+Entries are created only after a tracked vehicle remains inside a configured bay. Disable OCR in
+`.env` with `ENABLE_OCR=0` for detection-only runs when EasyOCR is not needed. Inference defaults
+to 1280px and uses overlapping tiles for high-resolution sources to improve small-vehicle recall, at
+a higher processing cost. Smaller sources use a single full-frame tile. CPU inference may not keep up
+with a live stream; a supported GPU or lower `YOLO_IMAGE_SIZE` may be needed. The camera overlay
+legend explains box/bay colors; blue boxes are detected vehicles, red boxes are confirmed in a mapped
+bay, green bays are available, and red bays are occupied. Detection counts are not ground-truth
+accuracy measurements; validate on annotated frames from the target camera.
+
+### Test a crash alert end to end
+
+The synthetic tests cover the detector and backend crash-event contract:
+
+```bash
+cd ai-service && python tests_crash.py
+cd ai-service && python tests_vehicle.py && python tests_detection.py
+cd ../backend && npm test
+```
+
+With the backend running, submit a synthetic crash event to verify it appears in the dashboard Alerts panel:
+
+```bash
+curl -X POST localhost:5000/api/events -H "x-api-key: dev-key" -H "Content-Type: application/json" \
+  -d '{"type":"crash","trackIds":[12,34],"message":"Test collision between tracks 12 and 34"}'
+```
+
+The AI pipeline emits this alert automatically when its overlap-and-deceleration heuristic triggers. Crash alerts show both track IDs in the dashboard. Treat them as possible collisions until validated against real footage.
 
 ### Test the backend without any AI (fake an event)
 ```bash
@@ -116,6 +151,6 @@ The AI service exposes `GET /health` and `POST /ml/predict-duration`. The latter
 | `parked` | trackId, slotId | marks slot occupied |
 | `exit` | trackId | closes session, stores duration, frees slot |
 | `wrong_parking` | trackId, plate?, message? | raises alert |
-| `crash` | message?, snapshot? | raises alert |
+| `crash` | trackIds? (two IDs), message?, snapshot? | raises high-severity alert; dashboard shows both track IDs |
 
 Watchlist is **simulated** for the prototype (as stated in the proposal).

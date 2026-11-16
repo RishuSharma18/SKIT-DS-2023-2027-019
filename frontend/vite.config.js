@@ -8,7 +8,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:5000',
       '/ai': {
-        target: 'http://localhost:8000',
+        target: process.env.AI_SERVICE_URL || 'http://localhost:8001',
         rewrite: (path) => path.replace(/^\/ai/, ''),
       },
       '/uploads': 'http://localhost:5000',

@@ -100,6 +100,13 @@ h1 span { color: #e8ad58; font-size: 18px; vertical-align: 3px; }
 .button-refresh > span { font-size: 16px; }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin: -7px 0 15px; padding: 10px 13px; border-radius: 7px; font-size: 10px; }
 .error-notice { border: 1px solid #f1d6d4; color: #a5423c; background: #fff8f7; }
+.source-notice { border: 1px solid #f0dfb8; color: #7f5a1a; background: #fffaf0; }
+.notice.restart-notice { display: block; line-height: 1.55; }
+.restart-notice > b { display: block; margin-bottom: 4px; font-size: 11px; }
+.restart-notice p { margin: 3px 0; }
+.restart-notice kbd { padding: 1px 4px; border: 1px solid currentColor; border-radius: 3px; font: inherit; }
+.restart-notice pre { max-width: 100%; margin: 5px 0; padding: 8px 10px; overflow-x: auto; border: 1px solid rgba(127,90,26,.2); border-radius: 5px; background: rgba(255,255,255,.55); }
+.restart-notice code { font: 10px/1.5 Consolas, "Courier New", monospace; white-space: pre; }
 .notice .text-button { flex: 0 0 auto; white-space: nowrap; }
 .text-button { padding: 3px 0; color: #16835d; background: none; font-size: 10px; font-weight: 700; }
 .text-button:hover { text-decoration: underline; }
@@ -148,6 +155,7 @@ h2 { margin: 0; color: #273448; font: 700 14px/1.35 'Segoe UI', sans-serif; lett
 .camera-view .feed-image.is-loading { opacity: 0; }
 .feed-live { position: absolute; top: 11px; left: 11px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 4px; color: #fff; background: rgba(13,25,40,.72); font-size: 8px; font-weight: 700; letter-spacing: .8px; }
 .feed-live .status-dot { width: 5px; height: 5px; background: #e75c5c; box-shadow: 0 0 0 3px rgba(231,92,92,.18); }
+.feed-live .status-dot.replay-dot { background: #e6a14e; box-shadow: 0 0 0 3px rgba(230,161,78,.18); }
 .feed-placeholder { display: flex; min-height: 215px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 22px; color: #9baac0; text-align: center; }
 .camera-view > .feed-placeholder { position: absolute; inset: 0; z-index: 1; }
 .feed-loading-placeholder { background: #172338; }
@@ -162,6 +170,7 @@ h2 { margin: 0; color: #273448; font: 700 14px/1.35 'Segoe UI', sans-serif; lett
 .camera-caption .status-dot.online { box-shadow: none; }
 
 .slot-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: -1px 0 14px; }
+.slot-panel-actions { display: flex; align-items: center; gap: 10px; }
 .slot-summary > span { display: inline-flex; align-items: center; gap: 5px; color: #7e8a9c; font-size: 9px; }
 .slot-summary b { margin-left: 1px; color: #465368; font-size: 9px; }
 .legend-dot { width: 7px; height: 7px; border-radius: 2px; }
@@ -174,6 +183,7 @@ h2 { margin: 0; color: #273448; font: 700 14px/1.35 'Segoe UI', sans-serif; lett
 .slot.free { border-color: #d9eee5; background: var(--slot-free-surface); }
 .slot.occupied { border-color: #f2dddb; background: var(--slot-occupied-surface); }
 .slot.reserved { border-color: #f2e7d4; background: var(--slot-reserved-surface); }
+.slot.unknown { border-color: var(--border); background: var(--field-surface); }
 .slot-status-mark { position: absolute; top: 9px; right: 9px; color: #38a775; font-size: 9px; }
 .slot.occupied .slot-status-mark { color: #d76b65; }
 .slot.reserved .slot-status-mark { color: #d69a45; }
@@ -182,6 +192,7 @@ h2 { margin: 0; color: #273448; font: 700 14px/1.35 'Segoe UI', sans-serif; lett
 .slot-status-label { color: #42916f; font-size: 7px; font-weight: 600; }
 .slot.occupied .slot-status-label { color: #c26964; }
 .slot.reserved .slot-status-label { color: #b3813d; }
+.slot.unknown .slot-status-mark, .slot.unknown .slot-status-label { color: #8793a3; }
 
 .recommendation-panel { padding-bottom: 16px; }
 .recommend-icon { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 8px; color: #278f69; background: #eaf7f1; font-size: 14px; }
@@ -335,6 +346,7 @@ tbody tr:hover { background: var(--table-hover); }
 .service-indicator { width: 6px; height: 6px; border-radius: 50%; background: #c94d4d; }
 .service-online .service-indicator { background: #36aa76; }
 .service-loading .service-indicator { background: #d69a45; }
+.service-outdated .service-indicator { background: #d69a45; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; clip-path: inset(50%); }
 
 @media (min-width: 1600px) {
@@ -497,6 +509,7 @@ html[data-theme="dark"] .watchlist-empty .empty-icon,
 html[data-theme="dark"] .activity-empty .empty-icon,
 html[data-theme="dark"] .compact-empty .empty-icon { color: #8bc6a7; }
 html[data-theme="dark"] .error-notice { border-color: #704445; color: #f0aaa5; background: #39282d; }
+html[data-theme="dark"] .source-notice { border-color: #665331; color: #e8c47e; background: #342f25; }
 html[data-theme="dark"] .camera-view { background: #111827; }
 html[data-theme="dark"] .ocr-check { color: #a4dfbd; background: #2b4539; }
 html[data-theme="dark"] .ocr-mode { color: #efd29d; background: #483a27; }

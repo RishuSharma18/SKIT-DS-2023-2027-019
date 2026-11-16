@@ -177,10 +177,11 @@ Recommends the best available parking slot based on vehicle class (`bike`, `car`
 
 **Query Parameters:**
 - `type` / `vehicleType`: Vehicle class (`bike` | `car` | `suv`, default: `car`).
+- `slotIds`: Optional comma-separated slot IDs to limit recommendations to spaces mapped by the active camera.
 
 **Request:**
 ```bash
-curl -X GET "http://localhost:5000/api/slots/recommend?type=car"
+curl -X GET "http://localhost:5000/api/slots/recommend?type=car&slotIds=A-04,A-05"
 ```
 
 **Response (`200 OK`):**
@@ -407,6 +408,7 @@ x-api-key: dev-key
 - `plate`: OCR license plate confirmed for an active track.
 - `parked`: Vehicle settled into a designated slot.
 - `exit`: Vehicle left the parking area.
+- `occupancy`: Reconciles the statuses of the slot IDs configured for this camera against current detections.
 - `wrong_parking`: Vehicle stationary outside valid parking polygons.
 - `crash`: Collision heuristic or ML detection triggered.
 - `stolen_vehicle`: Watchlist match or stolen vehicle detected.
@@ -414,6 +416,26 @@ x-api-key: dev-key
 ---
 
 ### Event Examples:
+
+#### Camera occupancy reconciliation
+The AI service sends the complete list of spaces in its camera map and the subset currently occupied.
+For live sources, missing mapped spaces are registered and only those listed slots are synchronized;
+other facility spaces are not changed. For prerecorded video, the backend broadcasts temporary
+occupancy for the dashboard but does not save it to the database or create session/alert history.
+
+```json
+{
+  "type": "occupancy",
+  "cameraId": "cam-1",
+  "sourceMode": "network",
+  "slots": [
+    { "slotId": "A-04", "type": "car" },
+    { "slotId": "A-05", "type": "car" },
+    { "slotId": "A-06", "type": "car" }
+  ],
+  "occupiedSlotIds": ["A-05"]
+}
+```
 
 #### 1. Crash Event with Base64 Snapshot
 When `snapshot` (base64 string or data URI) is provided, the backend writes the image to `backend/uploads/` and links the URL `/uploads/snap-...jpg` in the generated Alert document.
@@ -426,6 +448,7 @@ curl -X POST http://localhost:5000/api/events \
   -d '{
     "type": "crash",
     "cameraId": "cam-1",
+    "trackIds": [12, 34],
     "message": "Sudden deceleration and bounding box overlap detected near aisle junction",
     "snapshot": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
   }'
@@ -439,6 +462,7 @@ curl -X POST http://localhost:5000/api/events \
     "type": "crash",
     "severity": "high",
     "plate": null,
+    "trackIds": [12, 34],
     "cameraId": "cam-1",
     "slotId": null,
     "message": "Sudden deceleration and bounding box overlap detected near aisle junction",
