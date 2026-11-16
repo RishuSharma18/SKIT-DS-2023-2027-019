@@ -27,6 +27,7 @@ export default function createApp() {
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   app.use('/uploads', express.static(uploadsDir));
   app.use(morgan('dev'));
+  app.use('/api/v1', routes);
   app.use('/api', routes);
 
   // eslint-disable-next-line no-unused-vars

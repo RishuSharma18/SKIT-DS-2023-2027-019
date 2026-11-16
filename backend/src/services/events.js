@@ -4,13 +4,14 @@ import Watchlist from '../models/Watchlist.js';
 import Alert from '../models/Alert.js';
 import { recommendSlot } from './allocation.js';
 import { saveSnapshot } from './snapshot.js';
+import { emitRealtime } from './realtime.js';
 
 async function raiseAlert(io, data) {
   if (data.snapshot && typeof data.snapshot === 'string') {
     data.snapshot = saveSnapshot(data.snapshot);
   }
   const alert = await Alert.create(data);
-  io.emit('alert:new', alert);
+  emitRealtime(io, 'alert:new', alert);
   return alert;
 }
 
@@ -31,7 +32,7 @@ async function checkWatchlist(io, plate, cameraId, slotId, snapshot) {
 }
 
 async function emitSlots(io) {
-  io.emit('slots:update', await ParkingSlot.find().sort({ slotId: 1 }));
+  emitRealtime(io, 'slots:update', await ParkingSlot.find().sort({ slotId: 1 }));
 }
 
 /**
@@ -48,7 +49,7 @@ export async function handleEvent(io, ev) {
         trackId, cameraId, plate, vehicleType,
         entryTime: ev.timestamp ? new Date(ev.timestamp) : new Date(),
       });
-      io.emit('session:new', session);
+      emitRealtime(io, 'session:new', session);
       await checkWatchlist(io, plate, cameraId, null, ev.snapshot);
       return { session, recommendedSlot: rec ? rec.slotId : null };
     }
@@ -57,7 +58,7 @@ export async function handleEvent(io, ev) {
         { trackId, status: 'active' }, { plate }, { new: true, sort: { createdAt: -1 } }
       );
       await checkWatchlist(io, plate, cameraId, session?.slotId ?? null, ev.snapshot);
-      if (session) io.emit('session:update', session);
+      if (session) emitRealtime(io, 'session:update', session);
       return { session };
     }
     case 'parked': {
@@ -83,13 +84,13 @@ export async function handleEvent(io, ev) {
         await ParkingSlot.updateOne({ slotId: session.slotId }, { status: 'free', currentSession: null });
         await emitSlots(io);
       }
-      io.emit('session:update', session);
+      emitRealtime(io, 'session:update', session);
       return { session };
     }
     case 'occupancy': {
       const slotIds = ev.slots.map((slot) => slot.slotId);
       if (ev.sourceMode === 'video') {
-        io.emit('camera:occupancy', {
+        emitRealtime(io, 'camera:occupancy', {
           cameraId,
           slots: ev.slots,
           slotIds,
@@ -128,7 +129,7 @@ export async function handleEvent(io, ev) {
         await ParkingSlot.bulkWrite(updates);
         await emitSlots(io);
       }
-      io.emit('camera:occupancy', {
+      emitRealtime(io, 'camera:occupancy', {
         cameraId,
         slots: ev.slots,
         slotIds,
