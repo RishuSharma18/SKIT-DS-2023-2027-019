@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 const ALERT_TYPE = {
   stolen_vehicle: 'STOLEN_VEHICLE',
   crash: 'ACCIDENT',
@@ -10,9 +12,11 @@ const EVENT_TYPE = {
   'alert:new': 'ALERT',
   'session:new': 'ENTRY',
   'session:update': 'SESSION_UPDATE',
+  'camera:occupancy': 'SLOT_UPDATE',
 };
 
 function plainValue(value) {
+  if (Array.isArray(value)) return value.map(plainValue);
   return value && typeof value.toObject === 'function' ? value.toObject() : value;
 }
 
@@ -22,26 +26,37 @@ function eventEnvelope(name, value) {
   const eventType = name === 'session:update' && record.status === 'closed'
     ? 'EXIT'
     : EVENT_TYPE[name] || name.toUpperCase();
+  const category = String(record.vehicle_category || record.vehicleCategory || record.vehicleType || '').toUpperCase();
+  const vehicleCategory = ['TWO_WHEELER', 'COMPACT_CAR', 'SUV_SEDAN', 'HEAVY_VEHICLE'].includes(category)
+    ? category
+    : ['BIKE', 'MOTORBIKE', 'MOTORCYCLE'].includes(category)
+      ? 'TWO_WHEELER'
+      : ['TRUCK', 'BUS', 'HEAVY'].includes(category)
+        ? 'HEAVY_VEHICLE'
+        : category === 'SUV' || category === 'SEDAN'
+          ? 'SUV_SEDAN'
+          : record.vehicleType
+            ? 'COMPACT_CAR'
+            : null;
   return {
-    event_id: String(record._id || record.id || `${name}-${Date.now()}`),
+    event: name,
+    event_id: record.event_id || record.eventId || randomUUID(),
     timestamp: record.updatedAt || record.createdAt || record.timestamp || new Date().toISOString(),
-    camera_id: record.cameraId || 'CAM_01',
-    track_id: record.trackId ?? null,
-    vehicle_category: record.vehicleType || null,
-    plate_number: record.plate || null,
-    slot_id: record.slotId || null,
+    camera_id: record.camera_id || record.cameraId || 'cam-1',
+    track_id: record.track_id ?? record.trackId ?? null,
+    vehicle_category: vehicleCategory,
+    plate_number: record.plate_number || record.plateNumber || record.plate || null,
+    slot_id: record.slot_id || record.slotId || null,
     event_type: eventType,
     alert_type: name === 'alert:new' ? ALERT_TYPE[record.type] || null : null,
-    snapshot_url: record.snapshot || null,
+    snapshot_url: record.snapshot_url || record.snapshotUrl || record.snapshot || null,
     payload,
   };
 }
 
 export function emitRealtime(io, name, value) {
   io.emit(name, value);
-  const clients = io.nativeWebSocketClients || [];
-  const message = JSON.stringify(eventEnvelope(name, value));
-  for (const client of clients) {
-    if (client.readyState === 1) client.send(message);
+  if (typeof io.emitWebSocket === 'function') {
+    io.emitWebSocket(eventEnvelope(name, value));
   }
 }

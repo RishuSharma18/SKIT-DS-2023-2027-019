@@ -292,7 +292,7 @@ export function getCameraIds(): string[] {
     ?.split(',')
     .map((cameraId) => cameraId.trim())
     .filter(Boolean);
-  return configured?.length ? configured : ['CAM_01'];
+  return configured?.length ? configured : ['cam-1'];
 }
 
 export function getCameraStreamUrl(cameraId: string): string {

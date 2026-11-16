@@ -37,11 +37,13 @@ class VideoProcessor:
         self.active_collision_pairs = set()
         self.frame_index = 0
         self.last_occupancy_at = 0.0
+        self.last_occupied = set()
 
     def process(self, frame, captured_at=None):
         timestamp = captured_at or time()
         self.frame_index += 1
         if self.frame_index % (config.FRAME_SKIP + 1):
+            self._draw_zones(frame, self.last_occupied)
             return frame
 
         observations = self.detector.track(frame)
@@ -173,6 +175,8 @@ class VideoProcessor:
                         self.ocr.forget(track_id)
 
         self._draw_hud(frame, counts, sum(counts.values()))
+        self.last_occupied = occupied
+        self._draw_zones(frame, occupied)
 
         now = time()
         if now - self.last_occupancy_at >= 5:
@@ -292,3 +296,42 @@ class VideoProcessor:
         text = f"Vehicles {total} | 2W {counts['TWO_WHEELER']} | Cars {counts['COMPACT_CAR'] + counts['SUV_SEDAN']} | Heavy {counts['HEAVY_VEHICLE']}"
         cv2.rectangle(frame, (0, 0), (frame.shape[1], 28), (15, 24, 38), -1)
         cv2.putText(frame, text, (10, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (245, 248, 250), 1)
+
+    def _draw_zones(self, frame, occupied):
+        for slot in self.zone_map.slots:
+            polygon = slot["polygon_array"].astype(np.int32)
+            is_occupied = slot["slot_id"] in occupied
+            color = (0, 0, 255) if is_occupied else (0, 200, 0)
+            cv2.polylines(frame, [polygon], True, color, 3)
+            x, y = polygon[0]
+            cv2.putText(
+                frame,
+                f"{slot['slot_id']} {'OCCUPIED' if is_occupied else 'AVAILABLE'}",
+                (int(x), max(18, int(y) - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+            )
+        for zone in self.zone_map.no_parking_zones:
+            cv2.polylines(
+                frame,
+                [zone["polygon_array"].astype(np.int32)],
+                True,
+                (0, 0, 255),
+                2,
+            )
+        for wire in self.zone_map.tripwires:
+            start, end = [tuple(map(int, point)) for point in wire["line"]]
+            color = (255, 255, 0) if wire.get("event_type") == "ENTRY" else (255, 0, 255)
+            cv2.line(frame, start, end, color, 2)
+            midpoint = ((start[0] + end[0]) // 2, (start[1] + end[1]) // 2)
+            cv2.putText(
+                frame,
+                wire.get("event_type", "TRIPWIRE"),
+                midpoint,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                1,
+            )

@@ -12,9 +12,7 @@ const webSocketServer = new WebSocketServer({ noServer: true });
 const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL || '*' },
 });
-const eventClients = new Set();
-const eventSocketServer = new WebSocketServer({ noServer: true });
-io.nativeWebSocketClients = eventClients;
+io.nativeWebSocketClients = webSocketServer.clients;
 app.set('io', io);
 io.emitWebSocket = (message) => {
   const serialized = JSON.stringify(message);
@@ -23,22 +21,12 @@ io.emitWebSocket = (message) => {
   }
 };
 
-server.on('upgrade', (request, socket, head) => {
-  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
-  if (pathname !== '/ws/events') return;
-  webSocketServer.handleUpgrade(request, socket, head, (client) => {
-    webSocketServer.emit('connection', client, request);
-  });
-});
-
 webSocketServer.on('connection', (client) => {
-  client.send(JSON.stringify({ event: 'connected', payload: { ok: true } }));
-});
-
-eventSocketServer.on('connection', (socket) => {
-  eventClients.add(socket);
-  socket.on('close', () => eventClients.delete(socket));
-  socket.on('error', () => eventClients.delete(socket));
+  client.send(JSON.stringify({
+    event: 'connected',
+    event_type: 'CONNECTED',
+    payload: { ok: true },
+  }));
 });
 
 server.on('upgrade', (request, socket, head) => {
@@ -58,8 +46,8 @@ server.on('upgrade', (request, socket, head) => {
     socket.destroy();
     return;
   }
-  eventSocketServer.handleUpgrade(request, socket, head, (client) => {
-    eventSocketServer.emit('connection', client, request);
+  webSocketServer.handleUpgrade(request, socket, head, (client) => {
+    webSocketServer.emit('connection', client, request);
   });
 });
 

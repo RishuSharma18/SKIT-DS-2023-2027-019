@@ -2,6 +2,7 @@ const VEHICLE_CATEGORIES = ['TWO_WHEELER', 'COMPACT_CAR', 'SUV_SEDAN', 'HEAVY_VE
 const ALERT_TYPES = ['STOLEN_VEHICLE', 'ACCIDENT', 'WRONG_PARKING', 'OVERSTAY'];
 const EVENT_TYPES = ['ENTRY', 'EXIT', 'ALERT'];
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
 
 export default function validateAiEvent(req, res, next) {
   const event = req.body;
@@ -15,7 +16,7 @@ export default function validateAiEvent(req, res, next) {
   if (!UUID_PATTERN.test(event.event_id)) {
     return res.status(400).json({ error: 'event_id must be a UUID' });
   }
-  if (Number.isNaN(Date.parse(event.timestamp))) {
+  if (!ISO_TIMESTAMP_PATTERN.test(event.timestamp) || Number.isNaN(Date.parse(event.timestamp))) {
     return res.status(400).json({ error: 'timestamp must be a valid ISO-8601 datetime' });
   }
   if (!EVENT_TYPES.includes(event.event_type)) {
@@ -53,7 +54,8 @@ export default function validateAiEvent(req, res, next) {
     return res.status(400).json({ error: 'plate_number must be a string of at most 16 characters' });
   }
   if (event.plate_confidence !== undefined && event.plate_confidence !== null
-      && (typeof event.plate_confidence !== 'number' || event.plate_confidence < 0 || event.plate_confidence > 1)) {
+      && (typeof event.plate_confidence !== 'number' || !Number.isFinite(event.plate_confidence)
+        || event.plate_confidence < 0 || event.plate_confidence > 1)) {
     return res.status(400).json({ error: 'plate_confidence must be between 0 and 1' });
   }
   if (event.slot_id !== undefined && event.slot_id !== null

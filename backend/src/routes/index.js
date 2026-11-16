@@ -42,18 +42,21 @@ const validateZoneConfig = (body) => {
   if (body.no_parking_zones !== undefined
       && (!Array.isArray(body.no_parking_zones)
         || !hasUniqueIds(body.no_parking_zones, 'zone_id')
-        || !body.no_parking_zones.every((zone) => isPolygon(zone.polygon)))) return false;
+        || !body.no_parking_zones.every((zone) => zone && typeof zone === 'object'
+          && isPolygon(zone.polygon)))) return false;
   if (body.tripwires !== undefined
       && (!Array.isArray(body.tripwires)
         || !hasUniqueIds(body.tripwires, 'tripwire_id')
-        || !body.tripwires.every((wire) => ['ENTRY', 'EXIT'].includes(wire.event_type)
+        || !body.tripwires.every((wire) => wire && typeof wire === 'object'
+          && ['ENTRY', 'EXIT'].includes(wire.event_type)
           && Array.isArray(wire.line) && wire.line.length === 2
           && wire.line.every((point) => Array.isArray(point) && point.length === 2
             && point.every((coordinate) => Number.isFinite(coordinate)))))) return false;
   if (body.slots !== undefined
       && (!Array.isArray(body.slots)
         || !hasUniqueIds(body.slots, 'slot_id')
-        || !body.slots.every((slot) => typeof slot.slot_id === 'string'
+        || !body.slots.every((slot) => slot && typeof slot === 'object'
+          && typeof slot.slot_id === 'string'
           && CATEGORY_TO_TYPE[slot.vehicle_category]
           && isPolygon(slot.polygon)))) return false;
   return ['slots', 'no_parking_zones', 'tripwires'].some((key) => body[key] !== undefined);
@@ -62,7 +65,7 @@ const validateZoneConfig = (body) => {
 r.get('/health', (req, res) => res.json({ ok: true, time: new Date() }));
 
 // ---- Shared camera zone configuration and AI event contract
-r.get('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
+r.get('/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   const [slots, zones] = await Promise.all([
     ParkingSlot.find({ cameraId: req.params.cameraId }).lean(),
     CameraZone.findOne({ camera_id: req.params.cameraId }).lean(),
@@ -80,7 +83,7 @@ r.get('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   });
 }));
 
-r.put('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
+r.put('/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   if (!validateZoneConfig(req.body)) {
     return res.status(400).json({
       error: 'Zones require polygon arrays with at least three [x,y] points; tripwires require two [x,y] endpoints and ENTRY or EXIT.',
@@ -121,7 +124,7 @@ r.put('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   res.json({ ok: true, zones });
 }));
 
-r.post('/v1/ai-events', apiKey, validateAiEvent, wrap(async (req, res) => {
+r.post('/ai-events', apiKey, validateAiEvent, wrap(async (req, res) => {
   const result = await handleAiEvent(req.app.get('io'), req.body);
   res.status(result.duplicate ? 200 : 201).json(result);
 }));

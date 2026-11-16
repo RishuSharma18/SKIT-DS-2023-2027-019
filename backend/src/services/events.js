@@ -45,11 +45,20 @@ export async function handleEvent(io, ev) {
   switch (type) {
     case 'entry': {
       const rec = await recommendSlot(vehicleType);
-      const session = await ParkingSession.create({
-        trackId, cameraId, plate, vehicleType,
-        entryTime: ev.timestamp ? new Date(ev.timestamp) : new Date(),
-      });
-      emitRealtime(io, 'session:new', session);
+      let session = await ParkingSession.findOne({ trackId, cameraId, status: 'active' }).sort({ createdAt: -1 });
+      if (session) {
+        session.plate = plate || session.plate;
+        session.vehicleType = vehicleType || session.vehicleType;
+        session.slotId = slotId || session.slotId;
+        await session.save();
+        emitRealtime(io, 'session:update', session);
+      } else {
+        session = await ParkingSession.create({
+          trackId, cameraId, plate, vehicleType, slotId,
+          entryTime: ev.timestamp ? new Date(ev.timestamp) : new Date(),
+        });
+        emitRealtime(io, 'session:new', session);
+      }
       await checkWatchlist(io, plate, cameraId, null, ev.snapshot);
       return { session, recommendedSlot: rec ? rec.slotId : null };
     }
@@ -157,6 +166,12 @@ export async function handleEvent(io, ev) {
       return { alert: await raiseAlert(io, {
         type: 'stolen_vehicle', severity: 'high', plate, cameraId, slotId,
         message: ev.message || `Stolen vehicle detected${plate ? `: ${plate}` : ''}`,
+        snapshot: ev.snapshot || null,
+      }) };
+    case 'overstay':
+      return { alert: await raiseAlert(io, {
+        type: 'overstay', severity: 'low', plate, cameraId, slotId,
+        message: ev.message || 'Vehicle exceeded the configured parking duration',
         snapshot: ev.snapshot || null,
       }) };
     default: {

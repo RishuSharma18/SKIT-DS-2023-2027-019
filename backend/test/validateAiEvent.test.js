@@ -41,6 +41,7 @@ test('accepts a canonical entry event and related collision track', () => {
 
 test('rejects invalid canonical categories and malformed related track IDs', () => {
   assert.equal(validate({ ...event, vehicle_category: 'CAR' }).status, 400);
+  assert.equal(validate({ ...event, timestamp: 'November 16, 2026' }).status, 400);
   assert.equal(validate({
     ...event,
     event_type: 'ALERT',

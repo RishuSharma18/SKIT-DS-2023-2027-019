@@ -74,6 +74,7 @@ def health(request: Request):
     ]
     return {
         "ok": True,
+        "cameraId": config.CAMERA_ID,
         "ocrEnabled": config.ENABLE_OCR,
         "durationModelAvailable": MODEL_PATH.is_file(),
         "durationModelMetrics": metrics,
