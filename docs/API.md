@@ -1,8 +1,11 @@
 # API Reference Documentation
 
-Smart CCTV Parking & Vehicle Safety System Backend REST API and Real-Time Telemetry Interface.
+Smart CCTV Parking & Vehicle Safety System Backend REST API, OpenAPI/Swagger Interface, and Real-Time WebSocket Telemetry.
 
 - **Base URL**: `http://localhost:5000`
+- **Interactive Swagger UI**: `http://localhost:5000/docs`
+- **Interactive ReDoc**: `http://localhost:5000/redoc`
+- **OpenAPI JSON Spec**: `http://localhost:5000/openapi.json`
 - **Default Port**: `5000`
 - **Content-Type**: `application/json`
 - **Max JSON Payload**: `10MB` (accommodates base64 snapshot uploads)
@@ -10,518 +13,130 @@ Smart CCTV Parking & Vehicle Safety System Backend REST API and Real-Time Teleme
 ---
 
 ## Table of Contents
-1. [Authentication](#authentication)
-2. [Pagination & Filtering Standard](#pagination--filtering-standard)
-3. [Static Media Storage](#static-media-storage)
-4. [Overview & Analytics](#overview--analytics)
-   - [GET /api/health](#get-apihealth)
-   - [GET /api/stats](#get-apistats)
-   - [GET /api/analytics/hourly](#get-apianalyticshourly)
-5. [Parking Slots](#parking-slots)
-   - [GET /api/slots](#get-apislots)
-   - [GET /api/slots/recommend](#get-apislotsrecommend)
-6. [Parking Sessions](#parking-sessions)
-   - [GET /api/sessions](#get-apisessions)
-7. [Alerts & Safety Incidents](#alerts--safety-incidents)
-   - [GET /api/alerts](#get-apialerts)
-   - [PATCH /api/alerts/:id/ack](#patch-apialertsidack)
-8. [Watchlist (Stolen / Wanted Vehicles)](#watchlist-stolen--wanted-vehicles)
-   - [GET /api/watchlist](#get-apiwatchlist)
-   - [POST /api/watchlist](#post-apiwatchlist)
-   - [DELETE /api/watchlist/:id](#delete-apiwatchlistid)
-9. [Event Ingestion (AI Service / Edge Cams)](#event-ingestion-ai-service--edge-cams)
-   - [POST /api/events](#post-apievents)
-10. [Static Files](#static-files)
-    - [GET /uploads/:filename](#get-uploadsfilename)
-11. [WebSocket Events (Socket.IO)](#websocket-events-socketio)
+1. [Interactive OpenAPI / Swagger Documentation](#interactive-openapi--swagger-documentation)
+2. [Database Schema (PostgreSQL) & Migrations](#database-schema-postgresql--migrations)
+3. [Redis Caching & Event Idempotency](#redis-caching--event-idempotency)
+4. [Authentication](#authentication)
+5. [Core REST API Endpoints (/api/v1)](#core-rest-api-endpoints-apiv1)
+   - [POST /api/v1/ai-events (Event Ingestion & Watchlist Matching)](#post-apiv1ai-events)
+   - [POST /api/v1/slots/allocate (Smart Slot Allocation Engine)](#post-apiv1slotsallocate)
+   - [Parking Slots CRUD (/api/v1/slots)](#parking-slots-crud-apiv1slots)
+   - [Vehicle Sessions History & Filters (/api/v1/sessions)](#vehicle-sessions-history--filters-apiv1sessions)
+   - [Watchlist Management (/api/v1/watchlist)](#watchlist-management-apiv1watchlist)
+   - [Alerts & Acknowledgment (/api/v1/alerts)](#alerts--acknowledgment-apiv1alerts)
+6. [Real-Time WebSocket (/ws/events)](#real-time-websocket-wsevents)
+7. [Duration & Overstay Background Worker](#duration--overstay-background-worker)
+8. [Legacy Frontend Compatibility Endpoints (/api)](#legacy-frontend-compatibility-endpoints-api)
+9. [Static Media Storage (/uploads)](#static-media-storage-uploads)
+
+---
+
+## Interactive OpenAPI / Swagger Documentation
+
+The backend service automatically generates full OpenAPI 3.1.0 specifications and interactive Swagger documentation:
+- **Swagger UI**: Visit `http://localhost:5000/docs` in your browser to test all endpoints interactively.
+- **ReDoc**: Accessible at `http://localhost:5000/redoc` for detailed schemas and parameter tables.
+- **Raw OpenAPI Spec**: `GET http://localhost:5000/openapi.json`.
+
+---
+
+## Database Schema (PostgreSQL) & Migrations
+
+The database schema is managed via **Alembic** migrations (`backend/alembic/`):
+```bash
+cd backend
+alembic upgrade head
+python scripts/seed.py
+```
+
+### Table Definitions:
+1. **`parking_slots`**:
+   - `slot_id` (String PK): Unique slot identifier (e.g. `A-01`, `B-03`).
+   - `zone` (String, indexed): Zone name (e.g. `ZONE-A`, `ZONE-B`, `ZONE-C`).
+   - `allowed_category` (String): Allowed vehicle type (`TWO_WHEELER`, `COMPACT_CAR`, `SUV_SEDAN`, `HEAVY_VEHICLE`).
+   - `status` (String, indexed): Slot occupancy (`AVAILABLE`, `OCCUPIED`, `RESERVED`, `VIOLATION`).
+   - `polygon_coords` (JSONB / JSON): Array of polygon boundary vertices `[[x1, y1], [x2, y2], ...]`.
+   - `current_track_id` (Integer, nullable): Current vehicle track ID occupying the space.
+   - `created_at`, `updated_at`: Timestamps.
+
+2. **`vehicle_sessions`** (FR-11, FR-16):
+   - `session_id` (String PK, UUID): Session identifier.
+   - `track_id` (Integer, indexed): ByteTrack / YOLO tracker ID.
+   - `plate_number` (String, indexed): Recognized license plate (normalized).
+   - `vehicle_category` (String): `TWO_WHEELER`, `COMPACT_CAR`, `SUV_SEDAN`, `HEAVY_VEHICLE`.
+   - `assigned_slot_id` (String FK -> parking_slots): Recommended / reserved slot ID.
+   - `actual_slot_id` (String FK -> parking_slots): Physical slot parked in.
+   - `entry_time`: ISO8601 timestamp of vehicle entry.
+   - `exit_time`: ISO8601 timestamp of vehicle exit.
+   - `duration_minutes`: Exact parking duration in minutes calculated on exit.
+   - `status` (String, indexed): `ACTIVE`, `COMPLETED`, `OVERSTAY`.
+   - `overstay_alerted` (Boolean): Flag indicating overstay alert was triggered once.
+
+3. **`watchlist`** (FR-08):
+   - `id` (Integer PK, auto-increment): Entry ID.
+   - `plate_number` (String, unique indexed): Normalized uppercase license plate without spaces.
+   - `reason` (String): Reason for flagging (e.g. `STOLEN`, `WANTED`, `SUSPICIOUS`).
+   - `added_by` (String): Authority or user who added the record.
+   - `created_at`: Timestamp.
+   - `is_active` (Boolean, indexed): Active state.
+
+4. **`alerts`** (FR-15):
+   - `alert_id` (String PK, UUID): Alert identifier.
+   - `alert_type` (String, indexed): `STOLEN_VEHICLE`, `ACCIDENT`, `WRONG_PARKING`, `OVERSTAY`.
+   - `severity` (String): `HIGH`, `MEDIUM`, `LOW`.
+   - `plate_number` (String, indexed, nullable): Vehicle plate number.
+   - `slot_id` (String, nullable): Associated parking slot.
+   - `camera_id` (String): Camera source identifier (`cam-1`).
+   - `snapshot_url` (String, nullable): Relative URL `/uploads/snap-...jpg` for image verification.
+   - `message` (String, nullable): Descriptive alert message.
+   - `is_acknowledged` (Boolean, indexed): Acknowledgment flag.
+   - `created_at`: Incident timestamp.
+
+---
+
+## Redis Caching & Event Idempotency
+
+- **Sub-millisecond Watchlist Lookup**:
+  Active watchlist plates are pre-loaded into a Redis set (`watchlist:active_plates`). When a vehicle plate is recognized via OCR, the plate is normalized (`plate.upper().replace(' ', '').replace('-', '')`) and queried against Redis with `SISMEMBER` in sub-millisecond latency.
+  *(Falls back gracefully to an in-memory thread-safe cache if Redis is offline during local runs).*
+- **Event Idempotency Check**:
+  Duplicate video frames for the same vehicle `track_id` on `POST /api/v1/ai-events` (within a configurable 10-second deduplication window) are detected using Redis key `event:entry:{track_id}` (`SET NX EX 10`). Duplicate entry events return the existing session without creating duplicate database records.
 
 ---
 
 ## Authentication
 
-All standard queries are public.
-
-The AI event ingestion endpoint (`POST /api/events`) requires an API key in the request header:
+All query endpoints are public. The AI telemetry ingestion endpoint (`POST /api/v1/ai-events`) accepts:
 ```http
 x-api-key: dev-key
 ```
-*(Configure `AI_API_KEY` in `backend/.env`, defaults to `dev-key` in development).*
+*(Configured via `AI_API_KEY` in `backend/.env`).*
 
 ---
 
-## Pagination & Filtering Standard
+## Core REST API Endpoints (/api/v1)
 
-Endpoints returning collections (`/api/sessions`, `/api/alerts`) return a standard JSON Array `[...]` for compatibility with existing UI components, while exposing pagination metadata via HTTP response headers:
-
-- `X-Total-Count`: Total number of records matching the filter criteria.
-- `Access-Control-Expose-Headers`: Exposes `X-Total-Count` for cross-origin browser clients.
-
-### Common Pagination Query Parameters
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `page` | Integer | `1` | 1-based page index. |
-| `limit` | Integer | `20` (or 100/200 when unpaginated) | Maximum items to return per page. |
-
----
-
-## Static Media Storage
-
-When crash or stolen vehicle events are received with a `snapshot` (base64 image), the server decodes the image, stores it on disk under `backend/uploads/snap-<timestamp>-<hash>.jpg`, and records the relative URL `/uploads/<filename>` in the alert document. Images are served statically via Express.
-
----
-
-## Overview & Analytics
-
-### GET /api/health
-Checks backend operational status and current server timestamp.
-
-**Request:**
-```bash
-curl -X GET http://localhost:5000/api/health
-```
-
-**Response (`200 OK`):**
-```json
-{
-  "ok": true,
-  "time": "2026-11-15T14:30:00.000Z"
-}
-```
-
----
-
-### GET /api/stats
-Returns aggregate parking occupancy, vehicle count, daily entries, and open security alerts.
-
-**Request:**
-```bash
-curl -X GET http://localhost:5000/api/stats
-```
-
-**Response (`200 OK`):**
-```json
-{
-  "totalSlots": 12,
-  "freeSlots": 7,
-  "occupied": 5,
-  "occupiedSlots": 5,
-  "activeVehicles": 5,
-  "todayEntries": 24,
-  "openAlerts": 2
-}
-```
-
----
-
-### GET /api/analytics/hourly
-Calculates hourly vehicle entry distribution for a given date.
-
-**Query Parameters:**
-- `date` *(optional)*: Target date `YYYY-MM-DD` (defaults to today).
-- `nonzero` *(optional)*: `true` to return only hours with entries > 0.
-
-**Request:**
-```bash
-curl -X GET "http://localhost:5000/api/analytics/hourly?date=2026-11-15&nonzero=true"
-```
-
-**Response (`200 OK`):**
-```json
-[
-  { "hour": 9, "entries": 4 },
-  { "hour": 10, "entries": 8 },
-  { "hour": 11, "entries": 12 }
-]
-```
-
----
-
-## Parking Slots
-
-### GET /api/slots
-Returns all configured parking slots and their current allocation status.
-
-**Request:**
-```bash
-curl -X GET http://localhost:5000/api/slots
-```
-
-**Response (`200 OK`):**
-```json
-[
-  {
-    "_id": "67053e1a00a1b2c3d4e5f601",
-    "slotId": "A-01",
-    "type": "bike",
-    "status": "free",
-    "currentSession": null,
-    "createdAt": "2026-10-08T10:00:00.000Z",
-    "updatedAt": "2026-10-08T10:00:00.000Z"
-  },
-  {
-    "_id": "67053e1a00a1b2c3d4e5f602",
-    "slotId": "A-02",
-    "type": "car",
-    "status": "occupied",
-    "currentSession": "67053f2200a1b2c3d4e5f603",
-    "createdAt": "2026-10-08T10:00:00.000Z",
-    "updatedAt": "2026-10-08T10:05:00.000Z"
-  }
-]
-```
-
----
-
-### GET /api/slots/recommend
-Recommends the best available parking slot based on vehicle class (`bike`, `car`, `suv`).
-
-**Query Parameters:**
-- `type` / `vehicleType`: Vehicle class (`bike` | `car` | `suv`, default: `car`).
-- `slotIds`: Optional comma-separated slot IDs to limit recommendations to spaces mapped by the active camera.
-
-**Request:**
-```bash
-curl -X GET "http://localhost:5000/api/slots/recommend?type=car&slotIds=A-04,A-05"
-```
-
-**Response (`200 OK`):**
-```json
-{
-  "slot": {
-    "_id": "67053e1a00a1b2c3d4e5f604",
-    "slotId": "A-04",
-    "type": "car",
-    "status": "free",
-    "currentSession": null
-  }
-}
-```
-
-*(If no suitable slot is free, `"slot": null` is returned).*
-
----
-
-## Parking Sessions
-
-### GET /api/sessions
-Retrieves parking sessions with pagination and search filters.
-
-**Query Parameters:**
-| Parameter | Type | Example | Description |
-|---|---|---|---|
-| `plate` | String | `RJ14` | Substring match (case-insensitive). |
-| `status` | String | `closed` | Filter by status (`active` or `closed`). |
-| `vehicleType` | String | `car` | Filter by vehicle type (`bike`, `car`, `suv`). |
-| `slotId` | String | `A-04` | Filter by assigned slot. |
-| `cameraId` | String | `cam-1` | Filter by detection camera. |
-| `page` | Integer | `1` | Page number (default: 1). |
-| `limit` | Integer | `20` | Results per page (default: 20). |
-
-**Response Headers:**
-```http
-X-Total-Count: 45
-Access-Control-Expose-Headers: X-Total-Count
-```
-
-**Request:**
-```bash
-curl -i -X GET "http://localhost:5000/api/sessions?plate=RJ14&status=closed&page=1&limit=20"
-```
-
-**Response (`200 OK`):**
-```json
-[
-  {
-    "_id": "67054a1a00a1b2c3d4e5f701",
-    "trackId": 101,
-    "cameraId": "cam-1",
-    "plate": "RJ14-AB-1234",
-    "vehicleType": "car",
-    "slotId": "A-04",
-    "entryTime": "2026-11-15T09:15:00.000Z",
-    "exitTime": "2026-11-15T11:45:00.000Z",
-    "durationSec": 9000,
-    "status": "closed",
-    "overstayAlerted": false,
-    "createdAt": "2026-11-15T09:15:00.000Z",
-    "updatedAt": "2026-11-15T11:45:00.000Z"
-  }
-]
-```
-
----
-
-## Alerts & Safety Incidents
-
-### GET /api/alerts
-Retrieves security, safety, and violation alerts with filters and pagination.
-
-**Query Parameters:**
-| Parameter | Type | Example | Description |
-|---|---|---|---|
-| `type` | String | `crash` | Alert category (`crash`, `stolen_vehicle`, `wrong_parking`, `overstay`). |
-| `acknowledged` | Boolean | `false` | Filter by acknowledgment state (`true` or `false`). |
-| `severity` | String | `high` | Filter by severity (`low`, `medium`, `high`). |
-| `plate` | String | `RJ14` | Substring match on vehicle license plate. |
-| `slotId` | String | `A-01` | Filter by slot ID. |
-| `cameraId` | String | `cam-1` | Filter by camera ID. |
-| `page` | Integer | `1` | Page number (default: 1). |
-| `limit` | Integer | `20` | Results per page (default: 20). |
-
-**Response Headers:**
-```http
-X-Total-Count: 8
-Access-Control-Expose-Headers: X-Total-Count
-```
-
-**Request:**
-```bash
-curl -i -X GET "http://localhost:5000/api/alerts?type=crash&acknowledged=false&page=1&limit=20"
-```
-
-**Response (`200 OK`):**
-```json
-[
-  {
-    "_id": "67055c1a00a1b2c3d4e5f801",
-    "type": "crash",
-    "severity": "high",
-    "plate": null,
-    "cameraId": "cam-1",
-    "slotId": null,
-    "message": "Possible collision detected in aisle B",
-    "snapshot": "/uploads/snap-1731681234567-a1b2c3d4.jpg",
-    "acknowledged": false,
-    "createdAt": "2026-11-15T14:10:00.000Z",
-    "updatedAt": "2026-11-15T14:10:00.000Z"
-  }
-]
-```
-
----
-
-### PATCH /api/alerts/:id/ack
-Acknowledges and clears an alert.
-
-**Request:**
-```bash
-curl -X PATCH http://localhost:5000/api/alerts/67055c1a00a1b2c3d4e5f801/ack
-```
-
-**Response (`200 OK`):**
-```json
-{
-  "_id": "67055c1a00a1b2c3d4e5f801",
-  "type": "crash",
-  "severity": "high",
-  "acknowledged": true,
-  "snapshot": "/uploads/snap-1731681234567-a1b2c3d4.jpg",
-  "updatedAt": "2026-11-15T14:12:00.000Z"
-}
-```
-
----
-
-## Watchlist (Stolen / Wanted Vehicles)
-
-### GET /api/watchlist
-Returns all registered watchlist vehicles.
-
-**Request:**
-```bash
-curl -X GET http://localhost:5000/api/watchlist
-```
-
-**Response (`200 OK`):**
-```json
-[
-  {
-    "_id": "67052a1a00a1b2c3d4e5f901",
-    "plate": "RJ14AB1234",
-    "reason": "Stolen car report FIR #102/24",
-    "active": true,
-    "createdAt": "2026-10-08T09:00:00.000Z"
-  }
-]
-```
-
----
-
-### POST /api/watchlist
-Adds a new license plate to the watchlist.
-
-**Request Body:**
-```json
-{
-  "plate": "DL01XY9999",
-  "reason": "Wanted in traffic violation case",
-  "active": true
-}
-```
-
-**Request:**
-```bash
-curl -X POST http://localhost:5000/api/watchlist \
-  -H "Content-Type: application/json" \
-  -d '{"plate":"DL01XY9999","reason":"Wanted in traffic violation case"}'
-```
-
-**Response (`201 Created`):**
-```json
-{
-  "_id": "67056b2a00a1b2c3d4e5f902",
-  "plate": "DL01XY9999",
-  "reason": "Wanted in traffic violation case",
-  "active": true,
-  "createdAt": "2026-11-15T14:20:00.000Z"
-}
-```
-
----
-
-### DELETE /api/watchlist/:id
-Removes an entry from the watchlist.
-
-**Request:**
-```bash
-curl -X DELETE http://localhost:5000/api/watchlist/67056b2a00a1b2c3d4e5f902
-```
-
-**Response:**
-`204 No Content`
-
----
-
-## Event Ingestion (AI Service / Edge Cams)
-
-### POST /api/events
+### POST /api/v1/ai-events
 Ingests telemetry events from YOLOv8 tracking and EasyOCR plate recognition.
 
-**Headers:**
-```http
-Content-Type: application/json
-x-api-key: dev-key
-```
-
-**Supported Event Types:**
-- `entry`: Vehicle detected entering the parking lot.
-- `plate`: OCR license plate confirmed for an active track.
-- `parked`: Vehicle settled into a designated slot.
-- `exit`: Vehicle left the parking area.
-- `occupancy`: Reconciles the statuses of the slot IDs configured for this camera against current detections.
-- `wrong_parking`: Vehicle stationary outside valid parking polygons.
-- `crash`: Collision heuristic or ML detection triggered.
-- `stolen_vehicle`: Watchlist match or stolen vehicle detected.
-
----
-
-### Event Examples:
-
-#### Camera occupancy reconciliation
-The AI service sends the complete list of spaces in its camera map and the subset currently occupied.
-For live sources, missing mapped spaces are registered and only those listed slots are synchronized;
-other facility spaces are not changed. For prerecorded video, the backend broadcasts temporary
-occupancy for the dashboard but does not save it to the database or create session/alert history.
-
-```json
-{
-  "type": "occupancy",
-  "cameraId": "cam-1",
-  "sourceMode": "network",
-  "slots": [
-    { "slotId": "A-04", "type": "car" },
-    { "slotId": "A-05", "type": "car" },
-    { "slotId": "A-06", "type": "car" }
-  ],
-  "occupiedSlotIds": ["A-05"]
-}
-```
-
-#### 1. Crash Event with Base64 Snapshot
-When `snapshot` (base64 string or data URI) is provided, the backend writes the image to `backend/uploads/` and links the URL `/uploads/snap-...jpg` in the generated Alert document.
+**Event Types Supported:**
+- `entry`: Vehicle enters parking area. Triggers smart slot allocation, reserves slot, creates `ACTIVE` vehicle session.
+- `plate`: OCR license plate detected. Normalizes plate, checks Redis watchlist; if matched, creates `HIGH` severity `STOLEN_VEHICLE` alert immediately.
+- `parked`: Vehicle parks in slot polygon. Updates session `actual_slot_id` and marks slot `OCCUPIED`.
+- `exit`: Vehicle departs. Computes duration in minutes, sets session `COMPLETED`, frees parking slot.
+- `wrong_parking`: Vehicle parked outside designated polygons. Triggers `WRONG_PARKING` alert.
+- `crash` / `accident`: Collision detected. Saves base64 snapshot to disk, triggers `ACCIDENT` alert.
+- `stolen_vehicle`: Direct watchlist alert with snapshot.
 
 **Request:**
 ```bash
-curl -X POST http://localhost:5000/api/events \
-  -H "x-api-key: dev-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "crash",
-    "cameraId": "cam-1",
-    "trackIds": [12, 34],
-    "message": "Sudden deceleration and bounding box overlap detected near aisle junction",
-    "snapshot": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
-  }'
-```
-
-**Response (`201 Created`):**
-```json
-{
-  "alert": {
-    "_id": "67057d3a00a1b2c3d4e5fa01",
-    "type": "crash",
-    "severity": "high",
-    "plate": null,
-    "trackIds": [12, 34],
-    "cameraId": "cam-1",
-    "slotId": null,
-    "message": "Sudden deceleration and bounding box overlap detected near aisle junction",
-    "snapshot": "/uploads/snap-1731682345678-b2c3d4e5.jpg",
-    "acknowledged": false,
-    "createdAt": "2026-11-15T14:25:00.000Z",
-    "updatedAt": "2026-11-15T14:25:00.000Z"
-  }
-}
-```
-
----
-
-#### 2. Stolen Vehicle Event with Base64 Snapshot
-**Request:**
-```bash
-curl -X POST http://localhost:5000/api/events \
-  -H "x-api-key: dev-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "stolen_vehicle",
-    "plate": "RJ14AB1234",
-    "cameraId": "cam-1",
-    "message": "Watchlist match: RJ14AB1234 flagged stolen",
-    "snapshot": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
-  }'
-```
-
-**Response (`201 Created`):**
-```json
-{
-  "alert": {
-    "_id": "67057d3a00a1b2c3d4e5fa02",
-    "type": "stolen_vehicle",
-    "severity": "high",
-    "plate": "RJ14AB1234",
-    "cameraId": "cam-1",
-    "slotId": null,
-    "message": "Watchlist match: RJ14AB1234 flagged stolen",
-    "snapshot": "/uploads/snap-1731682345690-c3d4e5f6.jpg",
-    "acknowledged": false,
-    "createdAt": "2026-11-15T14:26:00.000Z",
-    "updatedAt": "2026-11-15T14:26:00.000Z"
-  }
-}
-```
-
----
-
-#### 3. Vehicle Entry
-**Request:**
-```bash
-curl -X POST http://localhost:5000/api/events \
+curl -X POST http://localhost:5000/api/v1/ai-events \
   -H "x-api-key: dev-key" \
   -H "Content-Type: application/json" \
   -d '{
     "type": "entry",
-    "trackId": 201,
-    "vehicleType": "car",
+    "trackId": 101,
+    "vehicleType": "COMPACT_CAR",
     "cameraId": "cam-1"
   }'
 ```
@@ -529,169 +144,162 @@ curl -X POST http://localhost:5000/api/events \
 **Response (`201 Created`):**
 ```json
 {
+  "success": true,
+  "event_type": "entry",
+  "message": "Processed entry event",
   "session": {
-    "_id": "67057e0000a1b2c3d4e5fb01",
-    "trackId": 201,
-    "cameraId": "cam-1",
-    "plate": null,
-    "vehicleType": "car",
-    "slotId": null,
-    "entryTime": "2026-11-15T14:30:00.000Z",
-    "status": "active",
-    "overstayAlerted": false
+    "session_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+    "track_id": 101,
+    "plate_number": null,
+    "vehicle_category": "COMPACT_CAR",
+    "assigned_slot_id": "A-03",
+    "actual_slot_id": null,
+    "camera_id": "cam-1",
+    "entry_time": "2026-11-16T22:30:00Z",
+    "exit_time": null,
+    "duration_minutes": 0.0,
+    "status": "ACTIVE",
+    "overstay_alerted": false
   },
-  "recommendedSlot": "A-04"
-}
-```
-
----
-
-#### 4. OCR Plate Read Event
-If the detected plate matches an active watchlist entry, a `stolen_vehicle` alert is automatically raised and broadcast via Socket.IO.
-
-**Request:**
-```bash
-curl -X POST http://localhost:5000/api/events \
-  -H "x-api-key: dev-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "plate",
-    "trackId": 201,
-    "plate": "RJ14-AB-1234",
-    "snapshot": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
-  }'
-```
-
-**Response (`201 Created`):**
-```json
-{
-  "session": {
-    "_id": "67057e0000a1b2c3d4e5fb01",
-    "trackId": 201,
-    "plate": "RJ14-AB-1234",
-    "vehicleType": "car",
-    "status": "active"
+  "allocation": {
+    "recommended_slot_id": "A-03",
+    "zone": "ZONE-A",
+    "allowed_category": "COMPACT_CAR",
+    "status": "RESERVED"
   }
 }
 ```
 
 ---
 
-#### 5. Vehicle Parked Event
+### POST /api/v1/slots/allocate
+Smart slot allocation engine finding the nearest `AVAILABLE` slot matching the vehicle category, with automatic fallback hierarchy.
+
+**Fallback Hierarchy:**
+- `TWO_WHEELER` -> `COMPACT_CAR` -> `SUV_SEDAN`
+- `COMPACT_CAR` -> `SUV_SEDAN` -> `HEAVY_VEHICLE`
+- `SUV_SEDAN` -> `HEAVY_VEHICLE`
+- `HEAVY_VEHICLE` -> None
+
 **Request:**
 ```bash
-curl -X POST http://localhost:5000/api/events \
-  -H "x-api-key: dev-key" \
+curl -X POST http://localhost:5000/api/v1/slots/allocate \
   -H "Content-Type: application/json" \
-  -d '{
-    "type": "parked",
-    "trackId": 201,
-    "slotId": "A-04"
-  }'
-```
-
-**Response (`201 Created`):**
-```json
-{
-  "session": {
-    "_id": "67057e0000a1b2c3d4e5fb01",
-    "trackId": 201,
-    "slotId": "A-04",
-    "status": "active"
-  }
-}
-```
-
----
-
-#### 6. Vehicle Exit Event
-Calculates duration and frees the slot.
-
-**Request:**
-```bash
-curl -X POST http://localhost:5000/api/events \
-  -H "x-api-key: dev-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "exit",
-    "trackId": 201
-  }'
-```
-
-**Response (`201 Created`):**
-```json
-{
-  "session": {
-    "_id": "67057e0000a1b2c3d4e5fb01",
-    "trackId": 201,
-    "status": "closed",
-    "durationSec": 1845,
-    "exitTime": "2026-11-15T15:00:45.000Z"
-  }
-}
-```
-
----
-
-#### 7. Wrong Parking Event
-**Request:**
-```bash
-curl -X POST http://localhost:5000/api/events \
-  -H "x-api-key: dev-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "wrong_parking",
-    "trackId": 202,
-    "plate": "RJ14-CD-5678",
-    "slotId": "A-01",
-    "message": "Parked in aisle blocking emergency exit"
-  }'
-```
-
-**Response (`201 Created`):**
-```json
-{
-  "alert": {
-    "_id": "67057e5000a1b2c3d4e5fc01",
-    "type": "wrong_parking",
-    "severity": "medium",
-    "plate": "RJ14-CD-5678",
-    "slotId": "A-01",
-    "message": "Parked in aisle blocking emergency exit",
-    "acknowledged": false
-  }
-}
-```
-
----
-
-## Static Files
-
-### GET /uploads/:filename
-Serves stored snapshot images recorded during crash or stolen vehicle incidents.
-
-**Request:**
-```bash
-curl -X GET http://localhost:5000/uploads/snap-1731682345678-b2c3d4e5.jpg --output snapshot.jpg
-```
-Or open directly in any web browser:
-```
-http://localhost:5000/uploads/snap-1731682345678-b2c3d4e5.jpg
+  -d '{"vehicle_category":"TWO_WHEELER"}'
 ```
 
 **Response (`200 OK`):**
-- Headers: `Content-Type: image/jpeg`
-- Body: Binary image file.
+```json
+{
+  "recommended_slot_id": "A-01",
+  "zone": "ZONE-A",
+  "allowed_category": "TWO_WHEELER",
+  "status": "RESERVED",
+  "message": "Slot A-01 (ZONE-A) allocated successfully."
+}
+```
 
 ---
 
-## WebSocket Events (Socket.IO)
+### Parking Slots CRUD (/api/v1/slots)
 
-Clients connect to the Socket.IO server at `/` (same port as HTTP server, e.g. `http://localhost:5000`).
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/slots` | List all slots with optional filters (`zone`, `status`, `allowed_category`). |
+| `POST` | `/api/v1/slots` | Create / configure slot with polygon coordinates. |
+| `GET` | `/api/v1/slots/{slot_id}` | Retrieve specific slot details. |
+| `PATCH` | `/api/v1/slots/{slot_id}` | Update status, polygon coordinates, or assigned category. |
+| `DELETE` | `/api/v1/slots/{slot_id}` | Delete parking slot. |
 
-| Event Name | Direction | Payload | Description |
-|---|---|---|---|
-| `alert:new` | Server -> Client | `Alert` object | Emitted whenever a safety alert (crash, stolen vehicle, wrong parking, overstay) is triggered. |
-| `session:new` | Server -> Client | `ParkingSession` object | Emitted when a vehicle enters the parking facility. |
-| `session:update` | Server -> Client | `ParkingSession` object | Emitted when a session's plate, slot, or exit duration is updated. |
-| `slots:update` | Server -> Client | Array of `ParkingSlot` objects | Emitted when parking slot occupancy changes (`free` <-> `occupied`). |
+---
+
+### Vehicle Sessions History & Filters (/api/v1/sessions)
+
+**Query Parameters:**
+- `plate` (string): Search plate number (partial match).
+- `status` (string): `ACTIVE`, `COMPLETED`, `OVERSTAY`.
+- `vehicle_category` (string): Filter by category.
+- `page` (integer, default: 1): Page number.
+- `limit` (integer, default: 20): Items per page.
+
+**Response Headers:**
+```http
+X-Total-Count: 15
+Access-Control-Expose-Headers: X-Total-Count
+```
+
+**Request:**
+```bash
+curl -i "http://localhost:5000/api/v1/sessions?plate=RJ14&status=COMPLETED&page=1&limit=20"
+```
+
+---
+
+### Watchlist Management (/api/v1/watchlist)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/watchlist` | List registered watchlist plates (filtered by `is_active`, `search`). |
+| `POST` | `/api/v1/watchlist` | Add license plate to watchlist (normalizes and updates Redis cache). |
+| `GET` | `/api/v1/watchlist/{id}` | Get single watchlist entry. |
+| `PUT` | `/api/v1/watchlist/{id}` | Update reason or active status. |
+| `DELETE` | `/api/v1/watchlist/{id}` | Remove license plate from watchlist and Redis cache. |
+
+---
+
+### Alerts & Acknowledgment (/api/v1/alerts)
+
+**Query Parameters:**
+- `type` (string): `STOLEN_VEHICLE`, `ACCIDENT`, `WRONG_PARKING`, `OVERSTAY`.
+- `severity` (string): `HIGH`, `MEDIUM`, `LOW`.
+- `acknowledged` (boolean): `true` or `false`.
+- `plate` (string): Filter by plate number.
+- `page` (int), `limit` (int): Pagination controls.
+
+**Acknowledge Alert:**
+```bash
+curl -X PATCH http://localhost:5000/api/v1/alerts/{alert_id}/ack
+```
+
+---
+
+## Real-Time WebSocket (/ws/events)
+
+Connect to `ws://localhost:5000/ws/events`. All dashboard updates and security notifications are broadcast in real-time JSON format:
+
+```json
+{
+  "event": "alert:new",
+  "data": {
+    "alert_id": "c1f7a4e2-...",
+    "alert_type": "STOLEN_VEHICLE",
+    "severity": "HIGH",
+    "plate_number": "RJ14AB1234",
+    "camera_id": "cam-1",
+    "snapshot_url": "/uploads/snap-1731682345678-b2c3d4e5.jpg",
+    "message": "CRITICAL: Stolen vehicle detected on camera cam-1: RJ14AB1234 (Reason: STOLEN)",
+    "is_acknowledged": false,
+    "created_at": "2026-11-16T22:30:00Z"
+  }
+}
+```
+
+**Supported Broadcast Events:**
+- `slots:update`: Array of all slot occupancies.
+- `session:new`: New vehicle entry logged.
+- `session:update`: Session status, slot, or duration changed.
+- `alert:new`: Immediate high/medium severity incident alert.
+- `alert:ack`: Alert acknowledged by operator.
+
+---
+
+## Duration & Overstay Background Worker
+
+- **Calculation on Exit**: When an `exit` event arrives, duration is computed in exact minutes: `duration_minutes = (exit_time - entry_time).total_seconds() / 60.0`.
+- **Periodic Background Check**: Runs automatically every 60 seconds (configurable via `OVERSTAY_CHECK_INTERVAL_SECONDS`). Any `ACTIVE` session exceeding `MAX_ALLOWED_DURATION` (default: 240 mins / 4 hours) is marked `status = OVERSTAY`, an `OVERSTAY` alert is generated, and broadcast via WebSocket to the security dashboard.
+
+---
+
+## Legacy Frontend Compatibility Endpoints (/api)
+
+The existing React dashboard endpoints (`/api/slots`, `/api/sessions`, `/api/alerts`, `/api/stats`, `/api/health`, `/api/slots/recommend`, `/api/analytics/hourly`) are fully mapped and compatible without any frontend breaking changes.
