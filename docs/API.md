@@ -22,6 +22,7 @@ Smart CCTV Parking & Vehicle Safety System Backend REST API, OpenAPI/Swagger Int
    - [POST /api/v1/slots/allocate (Smart Slot Allocation Engine)](#post-apiv1slotsallocate)
    - [Parking Slots CRUD (/api/v1/slots)](#parking-slots-crud-apiv1slots)
    - [Camera Zones (/api/v1/cameras/:cameraId/zones)](#camera-zones)
+   - [Plate OCR (/api/v1/ocr/plate)](#plate-ocr-apiv1ocrplate)
    - [Vehicle Sessions History & Filters (/api/v1/sessions)](#vehicle-sessions-history--filters-apiv1sessions)
    - [Watchlist Management (/api/v1/watchlist)](#watchlist-management-apiv1watchlist)
    - [Alerts & Acknowledgment (/api/v1/alerts)](#alerts--acknowledgment-apiv1alerts)
@@ -50,7 +51,7 @@ The backend service automatically generates full OpenAPI 3.1.0 specifications an
 
 ---
 
-## Database Schema (PostgreSQL) & Migrations
+## Database Schema (PostgreSQL / SQLite) & Migrations
 
 The database schema is managed via **Alembic** migrations (`backend/alembic/`):
 ```bash
@@ -62,6 +63,7 @@ python scripts/seed.py
 ### Table Definitions:
 1. **`parking_slots`**:
    - `slot_id` (String PK): Unique slot identifier (e.g. `A-01`, `B-03`).
+   - `camera_id` (String, indexed): Camera whose coordinate space owns this polygon.
    - `zone` (String, indexed): Zone name (e.g. `ZONE-A`, `ZONE-B`, `ZONE-C`).
    - `allowed_category` (String): Allowed vehicle type (`TWO_WHEELER`, `COMPACT_CAR`, `SUV_SEDAN`, `HEAVY_VEHICLE`).
    - `status` (String, indexed): Slot occupancy (`AVAILABLE`, `OCCUPIED`, `RESERVED`, `VIOLATION`).
@@ -97,7 +99,7 @@ python scripts/seed.py
    - `plate_number` (String, nullable): Associated vehicle plate.
    - `slot_id` (String, nullable): Slot associated with violation.
    - `camera_id` (String, nullable): Detecting edge camera.
-   - `snapshot_url` (String, nullable): Local URL to saved evidence image (`/uploads/snap-...jpg`).
+   - `snapshot_url` (String, nullable): Evidence URL; AI snapshots use `/media/alerts/`, while backend base64 uploads use `/uploads/`.
    - `message` (String): Operator-facing description.
    - `is_acknowledged` (Boolean, indexed): Acknowledgment flag.
    - `created_at`: Incident timestamp.
@@ -110,17 +112,17 @@ python scripts/seed.py
   Active watchlist plates are pre-loaded into a Redis set (`watchlist:active_plates`). When a vehicle plate is recognized via OCR, the plate is normalized (`plate.upper().replace(' ', '').replace('-', '')`) and queried against Redis with `SISMEMBER` in sub-millisecond latency.
   *(Falls back gracefully to an in-memory thread-safe cache if Redis is offline during local runs).*
 - **Event Idempotency Check**:
-  Duplicate video frames for the same vehicle `track_id` on `POST /api/v1/ai-events` (within a configurable 10-second deduplication window) are detected using Redis key `event:entry:{track_id}` (`SET NX EX 10`). Duplicate entry events return the existing session without creating duplicate database records.
+  Duplicate entry frames for the same camera and vehicle `track_id` on `POST /api/v1/ai-events` are detected using Redis (`SET NX EX`) within `IDEMPOTENCY_WINDOW_SECONDS` (10 seconds by default). Duplicate entry events return the existing session without creating duplicate database records.
 
 ---
 
 ## Authentication
 
-All standard query endpoints are public. AI telemetry ingestion and camera zone updates accept an API key in the request header:
+Standard query endpoints are public. AI telemetry ingestion and camera-zone reads require a non-empty API key; missing or incorrect keys are rejected:
 ```http
 x-api-key: dev-key
 ```
-*(Configured via `AI_API_KEY` in `backend/.env`).*
+*(Configure the same `AI_API_KEY` in `backend/.env` and `ai-service/.env`. The `dev-key` default is for local development only.)*
 
 ---
 
@@ -129,13 +131,15 @@ x-api-key: dev-key
 ### POST /api/v1/ai-events
 Ingests telemetry events from YOLOv8 tracking and EasyOCR plate recognition.
 
+AI sends canonical snake_case fields and `event_type`; legacy `type`, `trackId`, `vehicleType`, `plate`, `slotId`, and `cameraId` aliases remain accepted.
+
 **Event Types Supported:**
-- `entry`: Vehicle enters parking area. Triggers smart slot allocation, reserves slot, creates `ACTIVE` vehicle session.
-- `plate`: OCR license plate detected. Normalizes plate, checks Redis watchlist; if matched, creates `HIGH` severity `STOLEN_VEHICLE` alert immediately.
+- `ENTRY`: Vehicle enters. Reserves a camera-scoped slot and creates an `ACTIVE` session. A later entry carrying an OCR plate updates that session and checks the watchlist.
+- `plate` (legacy): OCR license plate detected. Normalizes plate, checks Redis watchlist; if matched, creates a `HIGH` severity `STOLEN_VEHICLE` alert immediately.
 - `parked`: Vehicle parks in slot polygon. Updates session `actual_slot_id` and marks slot `OCCUPIED`.
 - `exit`: Vehicle departs. Computes duration in minutes, sets session `COMPLETED`, frees parking slot.
-- `wrong_parking`: Vehicle parked outside designated polygons. Triggers `WRONG_PARKING` alert.
-- `crash` / `accident`: Collision detected. Saves base64 snapshot to disk, triggers `ACCIDENT` alert.
+- `ALERT` with `alert_type=WRONG_PARKING`: Vehicle parked outside designated polygons. Triggers `WRONG_PARKING` alert.
+- `ALERT` with `alert_type=CRASH` or `ACCIDENT`: Collision detected and triggers an `ACCIDENT` alert.
 - `stolen_vehicle`: Direct watchlist alert with snapshot.
 
 **Request:**
@@ -144,10 +148,10 @@ curl -X POST http://localhost:5000/api/v1/ai-events \
   -H "x-api-key: dev-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "type": "entry",
-    "trackId": 101,
-    "vehicleType": "COMPACT_CAR",
-    "cameraId": "cam-1"
+    "event_type": "ENTRY",
+    "track_id": 101,
+    "vehicle_category": "COMPACT_CAR",
+    "camera_id": "cam-1"
   }'
 ```
 
@@ -183,7 +187,7 @@ curl -X POST http://localhost:5000/api/v1/ai-events \
 ---
 
 ### POST /api/v1/slots/allocate
-Smart slot allocation engine finding the nearest `AVAILABLE` slot matching the vehicle category, with automatic fallback hierarchy.
+Smart slot allocation reserves an available camera-scoped slot matching the vehicle category, with automatic fallback hierarchy. It selects by polygon-centroid distance when a camera-frame `reference_point` is supplied; without one it uses deterministic zone and slot-ID ordering.
 
 **Fallback Hierarchy:**
 - `TWO_WHEELER` -> `COMPACT_CAR` -> `SUV_SEDAN`
@@ -195,13 +199,14 @@ Smart slot allocation engine finding the nearest `AVAILABLE` slot matching the v
 ```bash
 curl -X POST http://localhost:5000/api/v1/slots/allocate \
   -H "Content-Type: application/json" \
-  -d '{"vehicle_category":"TWO_WHEELER"}'
+  -d '{"vehicle_category":"TWO_WHEELER","camera_id":"cam-1","reference_point":[120,220]}'
 ```
 
 **Response (`200 OK`):**
 ```json
 {
   "recommended_slot_id": "A-01",
+  "camera_id": "cam-1",
   "zone": "ZONE-A",
   "allowed_category": "TWO_WHEELER",
   "status": "RESERVED",
@@ -215,17 +220,49 @@ curl -X POST http://localhost:5000/api/v1/slots/allocate \
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/v1/slots` | List all slots with optional filters (`zone`, `status`, `allowed_category`). |
-| `POST` | `/api/v1/slots` | Create / configure slot with polygon coordinates. |
+| `GET` | `/api/v1/slots` | List slots with optional filters (`camera_id`, `zone`, `status`, `allowed_category`); `configured_only=true` limits results to slots with camera polygons. |
+| `POST` | `/api/v1/slots` | Create / configure slot with camera ID and polygon coordinates. |
 | `GET` | `/api/v1/slots/{slot_id}` | Retrieve specific slot details. |
-| `PATCH` | `/api/v1/slots/{slot_id}` | Update status, polygon coordinates, or assigned category. |
+| `PATCH` | `/api/v1/slots/{slot_id}` | Update camera ID, status, polygon coordinates, or assigned category. |
 | `DELETE` | `/api/v1/slots/{slot_id}` | Delete parking slot. |
 
 ---
 
 ### Camera Zones
 
-`GET /api/v1/cameras/:cameraId/zones` returns slot polygons stored on parking-slot records, along with that camera's optional no-parking polygons and entry/exit tripwires. `PUT` accepts any subset of `slots`, `no_parking_zones`, and `tripwires`; slot geometry is upserted without deleting other slots. Coordinates are `[x,y]` points in the source camera's pixel space.
+`GET /api/v1/cameras/{camera_id}/zones` requires `x-api-key` and returns that camera's persisted slot polygons and vehicle categories. It currently returns empty `no_parking_zones` and `tripwires` arrays because the backend does not persist those zone types. Use `backend/scripts/sync_camera_zones.py` to synchronize polygons from `ai-service/config/slots.json`; it clears stale polygons for that camera but preserves the slot records. Restart the AI service after syncing because camera workers load their zone map at startup. Coordinates are `[x, y]` points in that camera's pixel space.
+
+---
+
+### Plate OCR (`POST /api/v1/ocr/plate`)
+
+The dashboard uploads a single photo to the backend, which forwards it in memory to the local AI service at `AI_SERVICE_URL`. The AI-service endpoint requires the configured `AI_API_KEY`; the browser never receives that service credential. The workflow does not save the image or OCR result. The current browser-facing backend follows the rest of the prototype API and does not authenticate dashboard users, so expose it only to trusted networks.
+
+Supported formats are JPEG, PNG, WebP, and BMP, up to 10 MB. The AI service validates the image signature, decodes it, checks its dimensions, then runs local EasyOCR. Provide a close, sharp image with the full plate visible. If `PLATE_MODEL` is unset, OCR reads text from the image rather than using a trained plate-localization model, so a tightly cropped plate photo is recommended.
+
+Response:
+
+```json
+{
+  "success": true,
+  "plate_detected": true,
+  "text": "RJ14 AB 1234",
+  "raw_text": "RJ14 AB 1234",
+  "normalized_text": "RJ14AB1234",
+  "confidence": 0.92,
+  "is_low_confidence": false,
+  "candidates": [{"text": "RJ14 AB 1234", "confidence": 0.92}],
+  "error": null
+}
+```
+
+`text`/`raw_text` preserve OCR output; `normalized_text` is a format-based suggestion, not a verified identity. `plate_detected` means the recognized text matched a supported plate pattern, not that ownership or identity was verified. When no plate-like text can be confirmed, the endpoint still returns a structured result with `plate_detected: false`, candidate text if any, and an explanatory `error`. Human review is required, especially for low-confidence results. The endpoint returns `413` for oversized files, `415` for unsupported image formats, `503` if local OCR weights are unavailable, and `504` if the AI service times out.
+
+The backend's `AI_SERVICE_URL` defaults to `http://127.0.0.1:8001`; set the same `AI_API_KEY` in `backend/.env` and `ai-service/.env`. Example:
+
+```powershell
+curl.exe -F "file=@C:\path\to\plate.jpg" http://localhost:5000/api/v1/ocr/plate
+```
 
 ---
 
@@ -281,7 +318,7 @@ curl -X PATCH http://localhost:5000/api/v1/alerts/{alert_id}/ack
 
 ## Real-Time WebSocket (/ws/events)
 
-Connect to `ws://localhost:5000/ws/events`. All dashboard updates and security notifications are broadcast in real-time JSON format:
+Connect to `ws://localhost:5000/ws/events`. Messages use `{ "event": "...", "data": ... }` and are broadcast in real time:
 
 ```json
 {
@@ -292,7 +329,7 @@ Connect to `ws://localhost:5000/ws/events`. All dashboard updates and security n
     "severity": "HIGH",
     "plate_number": "RJ14AB1234",
     "camera_id": "cam-1",
-    "snapshot_url": "/uploads/snap-1731682345678-b2c3d4e5.jpg",
+    "snapshot_url": "/media/alerts/example.jpg",
     "message": "CRITICAL: Stolen vehicle detected on camera cam-1: RJ14AB1234 (Reason: STOLEN)",
     "is_acknowledged": false,
     "created_at": "2026-11-16T22:30:00Z"
@@ -320,24 +357,35 @@ Connect to `ws://localhost:5000/ws/events`. All dashboard updates and security n
 
 ## Legacy Frontend Compatibility Endpoints (/api)
 
-The existing React dashboard endpoints (`/api/slots`, `/api/sessions`, `/api/alerts`, `/api/stats`, `/api/health`, `/api/slots/recommend`, `/api/analytics/hourly`) are fully mapped and compatible without any frontend breaking changes.
+The `/api/...` compatibility routes remain available to older clients. The current TypeScript dashboard uses the `/api/v1/...` routes as its primary API.
 
 ### GET /api/health
 ```json
 {
   "ok": true,
+  "database": "sqlite-fallback",
   "time": "2026-11-15T14:30:00.000Z"
 }
 ```
 
-### GET /api/stats
+### GET /api/v1/stats and GET /api/stats
+Returns all-time alert totals, open/today alert counts, active sessions (including overstay), and capacity/availability for camera-mapped slots only. `availableByCategory` contains free mapped slots by vehicle category; unconfigured database rows are excluded. The optional `timezone_offset_minutes` query parameter (minutes west of UTC, as returned by JavaScript `Date.getTimezoneOffset()`) scopes “today” counts to the dashboard's local date.
 ```json
 {
+  "totalCapacity": 12,
   "totalSlots": 12,
-  "freeSlots": 7,
-  "occupied": 5,
+  "availableSlots": 7,
+  "availableByCategory": {
+    "TWO_WHEELER": 2,
+    "COMPACT_CAR": 3,
+    "SUV_SEDAN": 2,
+    "HEAVY_VEHICLE": 0
+  },
   "occupiedSlots": 5,
+  "reservedSlots": 0,
   "activeVehicles": 5,
+  "totalAlerts": 8,
+  "alertsToday": 3,
   "todayEntries": 24,
   "openAlerts": 2
 }
@@ -363,10 +411,10 @@ Filter by `type`, `acknowledged`, `severity`, `page`, `limit`. Returns `X-Total-
 `GET /api/watchlist`, `POST /api/watchlist`, `DELETE /api/watchlist/:id`.
 
 ### Event Ingestion Legacy (/api/events)
-Accepts legacy and occupancy payloads (`type: occupancy`, `type: crash`, etc.) with `snapshot` base64 images.
+Requires `x-api-key` and accepts legacy `type`, `trackId`, and `vehicleType` aliases with `snapshot` base64 images.
 
 ---
 
 ## Static Media Storage (/uploads)
 
-When crash, accident, or stolen vehicle events are received with a `snapshot` (base64 image), the server decodes the image, stores it on disk under `backend/uploads/snap-<timestamp>-<hash>.jpg`, and records the relative URL `/uploads/<filename>` in the alert document. Images are served statically from `/uploads`.
+When events include a `snapshot` (base64 image), the backend decodes and stores it under `backend/uploads/` and records `/uploads/<filename>`. AI-generated `snapshot_url` files are served from the AI service's `/media/alerts` static route.

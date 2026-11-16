@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     OVERSTAY_CHECK_INTERVAL_SECONDS: int = 60
     ENABLE_OVERSTAY_WORKER: bool = True
     AI_API_KEY: str = os.getenv("AI_API_KEY", "dev-key")
+    AI_SERVICE_URL: str = os.getenv("AI_SERVICE_URL", "http://127.0.0.1:8001")
     IDEMPOTENCY_WINDOW_SECONDS: int = 10
 
     # Media / Uploads

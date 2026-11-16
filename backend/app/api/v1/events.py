@@ -1,19 +1,11 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
-from app.config import settings
+from app.api.dependencies import verify_api_key
 from app.database import get_db
 from app.schemas.event import AIEventPayload, AIEventResponse
 from app.services.event_ingestion import process_ai_event
 
 router = APIRouter(prefix="/ai-events", tags=["AI Telemetry Ingestion"])
-
-def verify_api_key(x_api_key: str = Header(None)):
-    if x_api_key and settings.AI_API_KEY and x_api_key != settings.AI_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid x-api-key header."
-        )
-    return True
 
 @router.post("", response_model=AIEventResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_ai_event(
