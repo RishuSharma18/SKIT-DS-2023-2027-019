@@ -1,5 +1,6 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.parking_slot import ParkingSlot
@@ -12,12 +13,21 @@ router = APIRouter(prefix="/slots", tags=["Parking Slots"])
 
 @router.get("", response_model=List[SlotResponse])
 def get_slots(
+    camera_id: Optional[str] = Query(None, description="Filter by camera ID"),
     zone: Optional[str] = Query(None, description="Filter by parking zone (e.g. ZONE-A)"),
     status: Optional[str] = Query(None, description="Filter by status (AVAILABLE, OCCUPIED, RESERVED, VIOLATION)"),
     allowed_category: Optional[str] = Query(None, description="Filter by allowed vehicle category"),
+    configured_only: bool = Query(False, description="Only return slots with a configured camera polygon"),
     db: Session = Depends(get_db)
 ):
     query = db.query(ParkingSlot)
+    if configured_only:
+        query = query.filter(
+            ParkingSlot.polygon_coords.isnot(None),
+            cast(ParkingSlot.polygon_coords, String) != "null",
+        )
+    if camera_id:
+        query = query.filter(ParkingSlot.camera_id == camera_id)
     if zone:
         query = query.filter(ParkingSlot.zone == zone)
     if status:
@@ -38,6 +48,7 @@ async def create_slot(slot: SlotCreate, db: Session = Depends(get_db)):
 
     db_slot = ParkingSlot(
         slot_id=slot.slot_id,
+        camera_id=slot.camera_id,
         zone=slot.zone,
         allowed_category=slot.allowed_category,
         status=slot.status or "AVAILABLE",
@@ -66,6 +77,8 @@ async def update_slot(slot_id: str, updates: SlotUpdate, db: Session = Depends(g
 
     if updates.zone is not None:
         slot.zone = updates.zone
+    if updates.camera_id is not None:
+        slot.camera_id = updates.camera_id
     if updates.allowed_category is not None:
         slot.allowed_category = updates.allowed_category
     if updates.status is not None:
@@ -107,11 +120,14 @@ async def allocate_slot_endpoint(request: AllocateRequest, db: Session = Depends
         db,
         request.vehicle_category,
         track_id=request.track_id,
-        reserve=True
+        reserve=True,
+        camera_id=request.camera_id,
+        reference_point=request.reference_point,
     )
     if not slot:
         return AllocateResponse(
             recommended_slot_id=None,
+            camera_id=request.camera_id,
             zone=None,
             allowed_category=None,
             status=None,
@@ -123,6 +139,7 @@ async def allocate_slot_endpoint(request: AllocateRequest, db: Session = Depends
 
     return AllocateResponse(
         recommended_slot_id=slot.slot_id,
+        camera_id=slot.camera_id,
         zone=slot.zone,
         allowed_category=slot.allowed_category,
         status=slot.status,

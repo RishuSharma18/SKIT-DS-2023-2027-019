@@ -45,6 +45,10 @@ if CAMERA_ID not in CAMERA_STREAMS:
 VIDEO_SOURCE = CAMERA_STREAMS.get(CAMERA_ID, next(iter(CAMERA_STREAMS.values())))
 
 YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")
+_yolo_path = Path(YOLO_MODEL)
+if not _yolo_path.is_absolute() and (SERVICE_DIR / _yolo_path).is_file():
+    YOLO_MODEL = str((SERVICE_DIR / _yolo_path).resolve())
+
 YOLO_IMAGE_SIZE = int(os.getenv("YOLO_IMAGE_SIZE", "1280"))
 TILE_OVERLAP = float(os.getenv("TILE_OVERLAP", "0.10"))
 TILE_MIN_WIDTH = int(os.getenv("TILE_MIN_WIDTH", "1920"))
@@ -54,6 +58,14 @@ CONFIDENCE = float(os.getenv("CONFIDENCE_THRESHOLD", os.getenv("CONFIDENCE", "0.
 FRAME_SKIP = max(0, int(os.getenv("FRAME_SKIP", "0")))
 TRACKER = os.getenv("TRACKER", "bytetrack.yaml")
 PLATE_MODEL = os.getenv("PLATE_MODEL", "").strip() or None
+if PLATE_MODEL and not Path(PLATE_MODEL).is_absolute() and (SERVICE_DIR / PLATE_MODEL).is_file():
+    PLATE_MODEL = str((SERVICE_DIR / PLATE_MODEL).resolve())
+
+EASYOCR_MODEL_DIR = Path(os.getenv("EASYOCR_MODEL_DIR", str(SERVICE_DIR / "models" / "easyocr")))
+if not EASYOCR_MODEL_DIR.is_absolute():
+    EASYOCR_MODEL_DIR = SERVICE_DIR / EASYOCR_MODEL_DIR
+EASYOCR_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+OCR_CONFIDENCE_THRESHOLD = float(os.getenv("OCR_CONFIDENCE_THRESHOLD", "0.60"))
 OCR_VOTE_FRAMES = max(1, int(os.getenv("OCR_VOTE_FRAMES", "5")))
 WRONG_PARKING_SECONDS = max(1, int(os.getenv("WRONG_PARKING_SECONDS", "15")))
 EVENT_SNAPSHOT_DIR = Path(os.getenv("EVENT_SNAPSHOT_DIR", "media/alerts"))

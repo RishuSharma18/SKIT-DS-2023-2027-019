@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -22,6 +22,7 @@ import {
   Plus,
   Radio,
   RefreshCw,
+  ScanLine,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -35,6 +36,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import PlateOCRPanel from './components/PlateOCRPanel';
 import {
   acknowledgeAlert,
   allocateSlot,
@@ -43,10 +45,12 @@ import {
   getAlerts,
   getCameraIds,
   getCameraStreamUrl,
+  getFacilityStats,
   getSessions,
   getSlots,
   getWatchlist,
   normalizeAlert,
+  recognizePlate,
   removeWatchlistEntry,
   resolveCameraStreamFallback,
   updateWatchlistEntry,
@@ -55,6 +59,7 @@ import {
 import type {
   AlertType,
   ConnectionState,
+  FacilityStats,
   LiveEvent,
   ParkingSession,
   ParkingSlot,
@@ -64,8 +69,8 @@ import type {
   WatchlistEntry,
 } from './types';
 
-type DashboardTab = 'overview' | 'alerts' | 'history' | 'watchlist';
-type DataKey = 'slots' | 'sessions' | 'alerts' | 'watchlist';
+type DashboardTab = 'overview' | 'alerts' | 'history' | 'watchlist' | 'ocr';
+type DataKey = 'slots' | 'sessions' | 'alerts' | 'watchlist' | 'stats';
 type DataState = Record<DataKey, { loading: boolean; error: string; loaded: boolean }>;
 
 const CATEGORY_NAMES: Record<VehicleCategory, string> = {
@@ -86,6 +91,7 @@ const INITIAL_DATA_STATE: DataState = {
   sessions: { loading: true, error: '', loaded: false },
   alerts: { loading: true, error: '', loaded: false },
   watchlist: { loading: true, error: '', loaded: false },
+  stats: { loading: true, error: '', loaded: false },
 };
 
 function formatClock(value: string | Date): string {
@@ -200,6 +206,7 @@ function App() {
   const [sessions, setSessions] = useState<ParkingSession[]>([]);
   const [alerts, setAlerts] = useState<SecurityAlert[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
+  const [facilityStats, setFacilityStats] = useState<FacilityStats | null>(null);
   const [dataState, setDataState] = useState<DataState>(INITIAL_DATA_STATE);
   const [tab, setTab] = useState<DashboardTab>('overview');
   const [connection, setConnection] = useState<ConnectionState>('connecting');
@@ -239,6 +246,7 @@ function App() {
       { key: 'sessions' as const, load: async () => { setSessions(await getSessions()); }, label: 'vehicle history' },
       { key: 'alerts' as const, load: async () => { setAlerts(await getAlerts()); }, label: 'security alerts' },
       { key: 'watchlist' as const, load: async () => { setWatchlist(await getWatchlist()); }, label: 'watchlist' },
+      { key: 'stats' as const, load: async () => { setFacilityStats(await getFacilityStats()); }, label: 'facility summary' },
     ];
     const results = await Promise.allSettled(resources.map((resource) => resource.load()));
     let failed = false;
@@ -277,6 +285,25 @@ function App() {
     };
   }, [loadDashboard]);
 
+  const refreshFacilityStats = useCallback(async () => {
+    try {
+      setFacilityStats(await getFacilityStats());
+      setDataState((current) => ({
+        ...current,
+        stats: { loading: false, error: '', loaded: true },
+      }));
+    } catch (error) {
+      setDataState((current) => ({
+        ...current,
+        stats: {
+          ...current.stats,
+          loading: false,
+          error: getErrorMessage(error),
+        },
+      }));
+    }
+  }, []);
+
   const handleLiveEvent = useCallback((event: LiveEvent) => {
     const name = event.name.toLowerCase();
     const raw = typeof event.payload === 'object' && event.payload !== null
@@ -300,22 +327,19 @@ function App() {
         if (sessionResult.status === 'fulfilled') setSessions(sessionResult.value);
       });
     } else if (name.includes('session') || name === 'entry' || name === 'exit') {
-      void getSessions().then(setSessions).catch(() => undefined);
+      void getSessions().then(setSessions).catch((error: unknown) => {
+        pushToast('Could not refresh vehicle history', getErrorMessage(error), 'error');
+      });
+    }
+    if (alertCandidate || name.includes('slot') || name.includes('session') || name === 'entry' || name === 'exit' || name === 'event') {
+      void refreshFacilityStats();
     }
     setUpdatedAt(new Date());
-  }, [pushToast]);
+  }, [pushToast, refreshFacilityStats]);
 
   useEffect(() => connectLiveEvents(handleLiveEvent, setConnection), [handleLiveEvent]);
 
-  const availableSlots = slots.filter((slot) => slot.status === 'AVAILABLE');
-  const occupiedSlots = slots.filter((slot) => slot.status === 'OCCUPIED');
-  const activeSessions = sessions.filter((session) => session.status === 'ACTIVE');
-  const todaysAlerts = alerts.filter((alert) => new Date(alert.timestamp).toDateString() === new Date().toDateString());
   const openAlerts = alerts.filter((alert) => !alert.acknowledged);
-  const availableByCategory = CATEGORIES.map((item) => ({
-    category: item,
-    count: availableSlots.filter((slot) => slot.category === item).length,
-  }));
   const filteredAlerts = alerts.filter((alert) => alertFilter === 'ALL' || alert.type === alertFilter);
   const filteredSessions = sessions.filter((session) => {
     const matchesStatus = sessionFilter === 'ALL' || session.status === sessionFilter;
@@ -329,6 +353,7 @@ function App() {
       const saved = await acknowledgeAlert(alert.id);
       setAlerts((current) => current.map((item) => item.id === saved.id ? saved : item));
       setUrgentAlert((current) => current?.id === saved.id ? null : current);
+      void refreshFacilityStats();
       pushToast('Alert acknowledged', `${ALERT_NAMES[saved.type]} marked for operator follow-up.`);
     } catch (error) {
       pushToast('Could not acknowledge alert', getErrorMessage(error), 'error');
@@ -341,11 +366,11 @@ function App() {
     setAllocating(true);
     setAllocation(null);
     try {
-      const result = await allocateSlot(category);
+      const result = await allocateSlot(category, selectedCamera);
       setAllocation(result.slot);
       pushToast(
         result.slot ? 'Slot recommendation ready' : 'No compatible space available',
-        result.slot ? `${result.slot.id} is currently available. Assignment is not reserved.` : 'Try a different vehicle category.',
+        result.slot ? `${result.slot.id} has been reserved for this recommendation.` : 'Try a different vehicle category.',
         result.slot ? 'success' : 'warning',
       );
     } catch (error) {
@@ -424,6 +449,7 @@ function App() {
       sessions: async () => { setSessions(await getSessions()); },
       alerts: async () => { setAlerts(await getAlerts()); },
       watchlist: async () => { setWatchlist(await getWatchlist()); },
+      stats: async () => { setFacilityStats(await getFacilityStats()); },
     };
     setDataState((current) => ({ ...current, [key]: { ...current[key], loading: true, error: '' } }));
     void loaders[key]()
@@ -450,9 +476,10 @@ function App() {
         <div className="ops-sidebar-label">WORKSPACE</div>
         <nav className="ops-nav" aria-label="Main navigation">
           <NavButton active={tab === 'overview'} label="Overview" icon={<LayoutDashboard size={17} />} onClick={() => setTab('overview')} />
-          <NavButton active={tab === 'alerts'} label="Alert center" icon={<Bell size={17} />} badge={openAlerts.length || undefined} onClick={() => setTab('alerts')} />
+          <NavButton active={tab === 'alerts'} label="Alert center" icon={<Bell size={17} />} badge={facilityStats?.openAlerts || undefined} onClick={() => setTab('alerts')} />
           <NavButton active={tab === 'history'} label="Vehicle history" icon={<Activity size={17} />} onClick={() => setTab('history')} />
           <NavButton active={tab === 'watchlist'} label="Watchlist" icon={<ShieldCheck size={17} />} onClick={() => setTab('watchlist')} />
+          <NavButton active={tab === 'ocr'} label="Plate OCR" icon={<ScanLine size={17} />} onClick={() => setTab('ocr')} />
         </nav>
         <div className="ops-sidebar-bottom">
           <div className="ops-connection-card">
@@ -495,18 +522,18 @@ function App() {
           {tab === 'overview' && (
             <>
               <section className="ops-kpis" aria-label="Facility key performance indicators">
-                <KpiCard label="Total capacity" value={dataState.slots.loaded ? slots.length : '—'} icon={<ParkingCircle size={17} />} tone="green" footer={`${occupiedSlots.length} currently occupied`} />
+                <KpiCard label="Total capacity" value={dataState.stats.loaded && facilityStats ? facilityStats.totalSlots : '—'} icon={<ParkingCircle size={17} />} tone="green" footer={facilityStats ? `${facilityStats.occupiedSlots} occupied · ${facilityStats.availableSlots} available` : 'Configured camera spaces'} />
                 <article className="ops-kpi ops-kpi-category">
                   <div className="ops-kpi-heading"><span>AVAILABLE BY CATEGORY</span><span className="ops-kpi-icon tone-blue"><Filter size={16} /></span></div>
                   <div className="ops-category-kpis">
-                    {availableByCategory.map((item) => (
-                      <span key={item.category} title={CATEGORY_NAMES[item.category]}>{categoryIcon(item.category, 14)}<b>{dataState.slots.loaded ? item.count : '—'}</b></span>
+                    {CATEGORIES.map((item) => (
+                      <span key={item} title={CATEGORY_NAMES[item]}>{categoryIcon(item, 14)}<b>{dataState.stats.loaded ? facilityStats?.availableByCategory[item] ?? '—' : '—'}</b></span>
                     ))}
                   </div>
                   <div className="ops-kpi-footer"><i className="dot dot-blue" />Free spaces by vehicle size</div>
                 </article>
-                <KpiCard label="Active vehicles" value={dataState.sessions.loaded ? activeSessions.length : '—'} icon={<Users size={17} />} tone="violet" footer={`${occupiedSlots.length} spaces occupied`} />
-                <KpiCard label="Today's alerts" value={dataState.alerts.loaded ? todaysAlerts.length : '—'} icon={<ShieldAlert size={17} />} tone={todaysAlerts.length ? 'amber' : 'green'} footer={`${openAlerts.length} need attention`} />
+                <KpiCard label="Active vehicles" value={dataState.stats.loaded && facilityStats ? facilityStats.activeVehicles : '—'} icon={<Users size={17} />} tone="violet" footer={`${facilityStats?.occupiedSlots ?? '—'} spaces occupied`} />
+                <KpiCard label="Total alerts" value={dataState.stats.loaded && facilityStats ? facilityStats.totalAlerts : '—'} icon={<ShieldAlert size={17} />} tone={facilityStats?.openAlerts ? 'amber' : 'green'} footer={`${facilityStats?.openAlerts ?? '—'} open · ${facilityStats?.alertsToday ?? '—'} today`} />
               </section>
 
               <div className="ops-dashboard-grid">
@@ -575,7 +602,7 @@ function App() {
 
           {tab === 'alerts' && (
             <section className="ops-panel ops-page-panel">
-              <PanelHeading eyebrow="SECURITY CENTER" title={`Alerts & incidents${openAlerts.length ? ` · ${openAlerts.length} open` : ''}`} trailing={<span className="ops-live-caption"><i />Live feed</span>} />
+              <PanelHeading eyebrow="SECURITY CENTER" title={`Alerts & incidents${(facilityStats?.openAlerts ?? openAlerts.length) ? ` · ${facilityStats?.openAlerts ?? openAlerts.length} open` : ''}`} trailing={<span className="ops-live-caption"><i />Live feed</span>} />
               <AlertFilters value={alertFilter} onChange={setAlertFilter} />
               <AlertFeed alerts={filteredAlerts} loading={dataState.alerts.loading} error={dataState.alerts.error} retry={() => retryResource('alerts')} onAcknowledge={acknowledge} acknowledgingId={acknowledgingId} expanded />
             </section>
@@ -600,6 +627,8 @@ function App() {
             </section>
           )}
 
+          {tab === 'ocr' && <PlateOCRPanel />}
+
           <footer className="ops-footer"><span>Parkwise operations dashboard</span><span>Backend allocation · AI-assisted monitoring</span></footer>
         </div>
       </main>
@@ -617,18 +646,21 @@ const TAB_LABELS: Record<DashboardTab, string> = {
   alerts: 'Alert center',
   history: 'Vehicle history',
   watchlist: 'Watchlist',
+  ocr: 'Plate OCR',
 };
 const PAGE_TITLE: Record<DashboardTab, string> = {
   overview: 'Good day, operator',
   alerts: 'Alert center',
   history: 'Vehicle history',
   watchlist: 'Watchlist management',
+  ocr: 'Number plate OCR',
 };
 const PAGE_SUBTITLE: Record<DashboardTab, string> = {
   overview: 'Monitor parking activity, camera feeds, and safety alerts in real time.',
   alerts: 'Review incidents, verify camera snapshots, and acknowledge operator actions.',
   history: 'Search vehicle arrivals, departures, and active parking sessions.',
   watchlist: 'Add, edit, pause, or remove plates monitored by security operations.',
+  ocr: 'Upload a plate photo for a separate, human-reviewable OCR result.',
 };
 
 function NavButton({

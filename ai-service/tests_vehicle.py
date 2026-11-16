@@ -21,8 +21,8 @@ class VehicleCategoryTests(unittest.TestCase):
     def test_sample_slot_map_contains_five_car_bays(self):
         slots = SlotMap(Path(__file__).parent / "config" / "slots.json")
         self.assertEqual(len(slots.slots), 5)
-        self.assertEqual(slots.locate((2097, 1238), "car")["slotId"], "A-04")
-        self.assertIsNone(slots.locate((2097, 1238), "bike"))
+        self.assertEqual(slots.locate((638, 114), "car")["slotId"], "A-01")
+        self.assertIsNone(slots.locate((638, 114), "bike"))
 
 
 if __name__ == "__main__":

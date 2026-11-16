@@ -55,7 +55,7 @@ Examples: `feat(detection): add ByteTrack tracking`, `fix(backend): free slot on
 5. When the event contract in README changes, update the README in the same PR.
 
 ## Frontend change checklist
-For dashboard work, keep UI changes in `frontend/` and follow the existing REST and Socket.IO contracts. Confirm the affected loading, empty, error, and success states, and check that forms and controls remain keyboard-accessible and usable on narrow screens.
+For dashboard work, keep UI changes in `frontend/` and follow the REST and WebSocket contracts documented in `docs/API.md`. Confirm the affected loading, empty, error, and success states, and check that forms and controls remain keyboard-accessible and usable on narrow screens.
 
 ```bash
 cd frontend

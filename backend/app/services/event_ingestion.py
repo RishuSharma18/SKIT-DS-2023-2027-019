@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import logging
 from typing import Tuple, Optional, Any
 from sqlalchemy.orm import Session
+from app.config import settings
 from app.models.parking_slot import ParkingSlot
 from app.models.vehicle_session import VehicleSession
 from app.models.watchlist import Watchlist
@@ -71,6 +72,10 @@ async def check_watchlist_match(
 
 async def process_ai_event(db: Session, payload: AIEventPayload) -> dict[str, Any]:
     event_type = payload.type.strip().lower()
+    if event_type == "alert":
+        event_type = (payload.alert_type or "").strip().lower()
+        if event_type == "accident":
+            event_type = "crash"
     track_id = payload.track_id
     raw_plate = payload.plate_number
     normalized_plate = normalize_plate(raw_plate)
@@ -79,7 +84,7 @@ async def process_ai_event(db: Session, payload: AIEventPayload) -> dict[str, An
     camera_id = payload.camera_id or "cam-1"
     message = payload.message
 
-    snapshot_url = None
+    snapshot_url = payload.snapshot_url
     if payload.snapshot:
         snapshot_url = save_base64_snapshot(payload.snapshot)
 
@@ -93,15 +98,40 @@ async def process_ai_event(db: Session, payload: AIEventPayload) -> dict[str, An
     if event_type == "entry":
         # Idempotency check: prevent duplicate entry records for same track_id
         if track_id is not None:
-            idempotency_key = f"event:entry:{track_id}"
-            is_new = redis_service.check_and_set_idempotency(idempotency_key, ttl_seconds=10)
+            idempotency_key = f"event:entry:{camera_id}:{track_id}"
+            is_new = redis_service.check_and_set_idempotency(
+                idempotency_key,
+                ttl_seconds=settings.IDEMPOTENCY_WINDOW_SECONDS,
+            )
 
             # Check if active session already exists in DB
             existing_session = (
                 db.query(VehicleSession)
-                .filter(VehicleSession.track_id == track_id, VehicleSession.status == "ACTIVE")
+                .filter(
+                    VehicleSession.track_id == track_id,
+                    VehicleSession.camera_id == camera_id,
+                    VehicleSession.status == "ACTIVE",
+                )
                 .first()
             )
+            if existing_session:
+                if normalized_plate and existing_session.plate_number != normalized_plate:
+                    existing_session.plate_number = normalized_plate
+                    db.commit()
+                    db.refresh(existing_session)
+                    result["message"] = "Active session updated with recognized plate."
+                    result["session"] = existing_session.to_dict()
+                    await ws_manager.broadcast_session_update(existing_session.to_dict())
+                    alert = await check_watchlist_match(
+                        db,
+                        normalized_plate,
+                        camera_id,
+                        existing_session.actual_slot_id or existing_session.assigned_slot_id,
+                        snapshot_url,
+                    )
+                    if alert:
+                        result["alert"] = alert.to_dict()
+                    return result
             if existing_session or not is_new:
                 logger.info(f"Idempotency triggered for duplicate entry event on track {track_id}")
                 result["message"] = "Duplicate entry frame ignored (idempotent)"
@@ -110,7 +140,11 @@ async def process_ai_event(db: Session, payload: AIEventPayload) -> dict[str, An
 
         # Smart slot allocation on entry
         allocated_slot, alloc_msg = allocate_nearest_slot(
-            db, vehicle_cat, track_id=track_id, reserve=True
+            db,
+            vehicle_cat,
+            track_id=track_id,
+            reserve=True,
+            camera_id=camera_id,
         )
 
         session = VehicleSession(
@@ -155,7 +189,11 @@ async def process_ai_event(db: Session, payload: AIEventPayload) -> dict[str, An
         if track_id is not None:
             session = (
                 db.query(VehicleSession)
-                .filter(VehicleSession.track_id == track_id, VehicleSession.status == "ACTIVE")
+                .filter(
+                    VehicleSession.track_id == track_id,
+                    VehicleSession.camera_id == camera_id,
+                    VehicleSession.status == "ACTIVE",
+                )
                 .order_by(VehicleSession.created_at.desc())
                 .first()
             )
@@ -184,7 +222,11 @@ async def process_ai_event(db: Session, payload: AIEventPayload) -> dict[str, An
         if track_id is not None:
             session = (
                 db.query(VehicleSession)
-                .filter(VehicleSession.track_id == track_id, VehicleSession.status == "ACTIVE")
+                .filter(
+                    VehicleSession.track_id == track_id,
+                    VehicleSession.camera_id == camera_id,
+                    VehicleSession.status == "ACTIVE",
+                )
                 .first()
             )
             if session and slot_id:
@@ -213,7 +255,11 @@ async def process_ai_event(db: Session, payload: AIEventPayload) -> dict[str, An
         if track_id is not None:
             session = (
                 db.query(VehicleSession)
-                .filter(VehicleSession.track_id == track_id, VehicleSession.status == "ACTIVE")
+                .filter(
+                    VehicleSession.track_id == track_id,
+                    VehicleSession.camera_id == camera_id,
+                    VehicleSession.status == "ACTIVE",
+                )
                 .first()
             )
             if session:
