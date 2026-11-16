@@ -53,3 +53,13 @@ Examples: `feat(detection): add ByteTrack tracking`, `fix(backend): free slot on
 3. Pull `main` at least daily and merge it into your feature branch. Commit small and often.
 4. Never push directly to `main`; use pull requests.
 5. When the event contract in README changes, update the README in the same PR.
+
+## Frontend change checklist
+For dashboard work, keep UI changes in `frontend/` and follow the existing REST and Socket.IO contracts. Confirm the affected loading, empty, error, and success states, and check that forms and controls remain keyboard-accessible and usable on narrow screens.
+
+```bash
+cd frontend
+npm run build
+```
+
+In the pull request, summarize the user-visible change, note any API or event-contract impact, and include a screenshot for significant visual updates. Ask a teammate to review before merging to `main`.

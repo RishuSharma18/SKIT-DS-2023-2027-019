@@ -8,11 +8,12 @@ export default function WatchlistPanel() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState('');
 
   useEffect(() => {
     getWatchlist()
       .then(setEntries)
-      .catch((err) => setError(err.message))
+      .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
   }, []);
 
@@ -21,14 +22,14 @@ export default function WatchlistPanel() {
     setError('');
     setSaving(true);
     try {
-      const entryData = { plate: plate.trim() };
+      const entryData = { plate: plate.trim().toUpperCase() };
       if (reason.trim()) entryData.reason = reason.trim();
       const entry = await addWatchlistEntry(entryData);
-      setEntries((current) => [entry, ...current]);
+      setEntries((current) => [entry, ...current.filter((item) => item._id !== entry._id)]);
       setPlate('');
       setReason('');
-    } catch (err) {
-      setError(err.message);
+    } catch (requestError) {
+      setError(requestError.message);
     } finally {
       setSaving(false);
     }
@@ -36,53 +37,53 @@ export default function WatchlistPanel() {
 
   const onDelete = async (id) => {
     setError('');
+    setDeletingId(id);
     try {
       await deleteWatchlistEntry(id);
       setEntries((current) => current.filter((entry) => entry._id !== id));
-    } catch (err) {
-      setError(err.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setDeletingId('');
     }
   };
 
   return (
     <>
-      <h2>Vehicle watchlist</h2>
+      <div className="watchlist-intro"><span className="security-icon" aria-hidden="true">⌑</span><p>Add a vehicle plate to flag it for operator attention.</p></div>
       <form className="watchlist-form" onSubmit={onSubmit}>
         <label className="field">
-          Plate number
-          <input
-            value={plate}
-            onChange={(event) => setPlate(event.target.value)}
-            placeholder="RJ14AB1234"
-            required
-          />
+          <span>Plate number</span>
+          <input value={plate} onChange={(event) => setPlate(event.target.value)} placeholder="e.g. RJ14AB1234" autoComplete="off" maxLength={16} required />
         </label>
         <label className="field">
-          Reason <span className="muted">(optional)</span>
-          <input
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Reported stolen"
-          />
+          <span>Reason <small>(optional)</small></span>
+          <input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Reported stolen" maxLength={120} />
         </label>
-        <button type="submit" disabled={saving}>{saving ? 'Adding...' : 'Add plate'}</button>
+        <button className="button-primary add-plate-button" type="submit" disabled={saving || !plate.trim()}>
+          <span aria-hidden="true">+</span> {saving ? 'Adding…' : 'Add vehicle'}
+        </button>
       </form>
-      {error && <p className="error" role="alert">{error}</p>}
-      {loading ? <p className="muted">Loading watchlist...</p> : entries.length ? (
+      {error && <p className="error watchlist-error" role="alert">{error}</p>}
+      <div className="watchlist-list-heading"><span>FLAGGED VEHICLES</span><span className="watchlist-count">{loading ? '…' : entries.length}</span></div>
+      {loading ? <p className="muted list-loading">Loading watchlist…</p> : entries.length ? (
         <ul className="watchlist">
           {entries.map((entry) => (
             <li key={entry._id}>
-              <div>
+              <span className="plate-icon" aria-hidden="true">▰</span>
+              <div className="watchlist-details">
                 <code>{entry.plate}</code>
-                <div className="muted">{entry.reason}</div>
+                <span>{entry.reason || 'Reported stolen'}</span>
               </div>
-              <button className="button-secondary" onClick={() => onDelete(entry._id)}>
-                Delete
+              <button className="remove-button" type="button" onClick={() => onDelete(entry._id)} disabled={deletingId === entry._id} aria-label={`Remove ${entry.plate} from watchlist`}>
+                {deletingId === entry._id ? 'Removing…' : 'Remove'}
               </button>
             </li>
           ))}
         </ul>
-      ) : <p className="muted">No watchlist entries.</p>}
+      ) : (
+        <div className="empty-state watchlist-empty"><span className="empty-icon" aria-hidden="true">☆</span><b>No flagged vehicles</b><span>Added plates will be monitored by the system.</span></div>
+      )}
     </>
   );
 }
