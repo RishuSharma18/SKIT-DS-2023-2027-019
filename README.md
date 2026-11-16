@@ -159,6 +159,8 @@ A **stolen_vehicle** alert should appear on the dashboard (that plate is in the 
 ## Dashboard service indicators and ML estimate
 The dashboard's live badge reflects the backend Socket.IO connection. Its service strip checks the backend API and AI-service health, camera stream, OCR configuration, and whether the duration model is present. Recognized plates are shown from OCR events saved on parking sessions; safety-alert snapshots link to the backend `/uploads` endpoint.
 
+The dashboard also supports the `/api/v1` aliases for the REST endpoints, `POST /api/v1/slots/allocate`, and `GET/POST/PUT/DELETE /api/v1/watchlist`. It receives standardized live event envelopes from the backend at `/ws/events`; existing Socket.IO clients remain supported. Copy `frontend/.env.example` to `.env.local` to configure the optional `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`, `NEXT_PUBLIC_AI_STREAM_URL`, and `NEXT_PUBLIC_CAMERA_IDS` values.
+
 The AI service exposes `GET /health` and `POST /ml/predict-duration`. The latter accepts `{"vehicleType":"car","arrivalHour":9,"weekday":0}` and returns an estimated stay in minutes. The estimate is a prototype trained on generated synthetic data; the current backend slot recommendation still uses its existing allocation rules and does not use this estimate to select a space.
 
 ## Event contract (ai-service → backend `POST /api/events`)

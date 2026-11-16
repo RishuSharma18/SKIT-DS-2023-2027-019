@@ -12,6 +12,7 @@ const webSocketServer = new WebSocketServer({ noServer: true });
 const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL || '*' },
 });
+io.nativeWebSocketClients = webSocketServer.clients;
 app.set('io', io);
 io.emitWebSocket = (message) => {
   const serialized = JSON.stringify(message);
@@ -20,16 +21,34 @@ io.emitWebSocket = (message) => {
   }
 };
 
+webSocketServer.on('connection', (client) => {
+  client.send(JSON.stringify({
+    event: 'connected',
+    event_type: 'CONNECTED',
+    payload: { ok: true },
+  }));
+});
+
 server.on('upgrade', (request, socket, head) => {
-  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+  let pathname;
+  try {
+    pathname = new URL(request.url, 'http://localhost').pathname;
+  } catch {
+    socket.destroy();
+    return;
+  }
   if (pathname !== '/ws/events') return;
+
+  const allowedOrigin = process.env.CLIENT_URL;
+  const requestOrigin = request.headers.origin;
+  if (allowedOrigin && allowedOrigin !== '*' && requestOrigin && requestOrigin !== allowedOrigin) {
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
   webSocketServer.handleUpgrade(request, socket, head, (client) => {
     webSocketServer.emit('connection', client, request);
   });
-});
-
-webSocketServer.on('connection', (client) => {
-  client.send(JSON.stringify({ event: 'connected', payload: { ok: true } }));
 });
 
 io.on('connection', (socket) => {

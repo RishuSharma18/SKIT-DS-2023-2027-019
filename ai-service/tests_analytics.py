@@ -14,9 +14,9 @@ def test_tripwire_requires_a_finite_segment_crossing():
     engine = ZoneEngine(zones)
 
     assert engine.crossed_tripwires(
-        {"box": [6, 0, 8, 5]},
         {"box": [2, 0, 4, 5]},
-    ) == ["ENTRY"]
+        {"box": [0, 0, 2, 5]},
+    ) == []
     assert engine.crossed_tripwires(
         {"box": [6, 0, 8, 5]},
         {"box": [2, 0, 4, 5]},

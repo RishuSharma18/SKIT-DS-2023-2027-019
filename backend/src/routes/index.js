@@ -42,18 +42,21 @@ const validateZoneConfig = (body) => {
   if (body.no_parking_zones !== undefined
       && (!Array.isArray(body.no_parking_zones)
         || !hasUniqueIds(body.no_parking_zones, 'zone_id')
-        || !body.no_parking_zones.every((zone) => isPolygon(zone.polygon)))) return false;
+        || !body.no_parking_zones.every((zone) => zone && typeof zone === 'object'
+          && isPolygon(zone.polygon)))) return false;
   if (body.tripwires !== undefined
       && (!Array.isArray(body.tripwires)
         || !hasUniqueIds(body.tripwires, 'tripwire_id')
-        || !body.tripwires.every((wire) => ['ENTRY', 'EXIT'].includes(wire.event_type)
+        || !body.tripwires.every((wire) => wire && typeof wire === 'object'
+          && ['ENTRY', 'EXIT'].includes(wire.event_type)
           && Array.isArray(wire.line) && wire.line.length === 2
           && wire.line.every((point) => Array.isArray(point) && point.length === 2
             && point.every((coordinate) => Number.isFinite(coordinate)))))) return false;
   if (body.slots !== undefined
       && (!Array.isArray(body.slots)
         || !hasUniqueIds(body.slots, 'slot_id')
-        || !body.slots.every((slot) => typeof slot.slot_id === 'string'
+        || !body.slots.every((slot) => slot && typeof slot === 'object'
+          && typeof slot.slot_id === 'string'
           && CATEGORY_TO_TYPE[slot.vehicle_category]
           && isPolygon(slot.polygon)))) return false;
   return ['slots', 'no_parking_zones', 'tripwires'].some((key) => body[key] !== undefined);
@@ -62,7 +65,7 @@ const validateZoneConfig = (body) => {
 r.get('/health', (req, res) => res.json({ ok: true, time: new Date() }));
 
 // ---- Shared camera zone configuration and AI event contract
-r.get('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
+r.get('/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   const [slots, zones] = await Promise.all([
     ParkingSlot.find({ cameraId: req.params.cameraId }).lean(),
     CameraZone.findOne({ camera_id: req.params.cameraId }).lean(),
@@ -80,7 +83,7 @@ r.get('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   });
 }));
 
-r.put('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
+r.put('/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   if (!validateZoneConfig(req.body)) {
     return res.status(400).json({
       error: 'Zones require polygon arrays with at least three [x,y] points; tripwires require two [x,y] endpoints and ENTRY or EXIT.',
@@ -121,7 +124,7 @@ r.put('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
   res.json({ ok: true, zones });
 }));
 
-r.post('/v1/ai-events', apiKey, validateAiEvent, wrap(async (req, res) => {
+r.post('/ai-events', apiKey, validateAiEvent, wrap(async (req, res) => {
   const result = await handleAiEvent(req.app.get('io'), req.body);
   res.status(result.duplicate ? 200 : 201).json(result);
 }));
@@ -191,6 +194,22 @@ r.get('/slots/recommend', wrap(async (req, res) => {
   const slot = await recommendSlot(req.query.type || req.query.vehicleType || 'car', slotIds);
   res.json({ slot });
 }));
+r.post('/slots/allocate', wrap(async (req, res) => {
+  const category = String(req.body.vehicle_category || req.body.vehicleCategory || '').toUpperCase();
+  const categoryTypes = {
+    TWO_WHEELER: 'bike',
+    COMPACT_CAR: 'car',
+    SUV_SEDAN: 'suv',
+    HEAVY_VEHICLE: 'suv',
+  };
+  const vehicleType = categoryTypes[category] || req.body.vehicleType;
+  if (!['bike', 'car', 'suv'].includes(vehicleType)) {
+    const error = new Error('Provide a supported vehicle category.');
+    error.status = 400;
+    throw error;
+  }
+  res.json({ slot: await recommendSlot(vehicleType) });
+}));
 
 // ---- Sessions (check-in / check-out history)
 r.get('/sessions', wrap(async (req, res) => {
@@ -231,6 +250,23 @@ r.get('/sessions', wrap(async (req, res) => {
 // ---- Watchlist (simulated stolen-vehicle DB)
 r.get('/watchlist', wrap(async (req, res) => res.json(await Watchlist.find().sort({ createdAt: -1 }))));
 r.post('/watchlist', wrap(async (req, res) => res.status(201).json(await Watchlist.create(req.body))));
+r.put('/watchlist/:id', wrap(async (req, res) => {
+  const updates = {};
+  for (const key of ['plate', 'reason', 'active']) {
+    if (Object.hasOwn(req.body, key)) updates[key] = req.body[key];
+  }
+  const entry = await Watchlist.findByIdAndUpdate(
+    req.params.id,
+    updates,
+    { new: true, runValidators: true },
+  );
+  if (!entry) {
+    const error = new Error('Watchlist entry not found.');
+    error.status = 404;
+    throw error;
+  }
+  res.json(entry);
+}));
 r.delete('/watchlist/:id', wrap(async (req, res) => {
   await Watchlist.findByIdAndDelete(req.params.id);
   res.status(204).end();

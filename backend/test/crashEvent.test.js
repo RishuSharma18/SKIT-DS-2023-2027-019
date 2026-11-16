@@ -81,3 +81,21 @@ test('defaults track IDs for other alert types', () => {
   assert.equal(alert.validateSync(), undefined);
   assert.deepEqual(alert.trackIds, []);
 });
+
+test('handles overstay events from the canonical AI event contract', async () => {
+  const originalCreate = Alert.create;
+  const emitted = [];
+  Alert.create = async (data) => data;
+  try {
+    const { handleEvent } = await import('../src/services/events.js');
+    const result = await handleEvent(
+      { emit: (name, value) => emitted.push({ name, value }) },
+      { type: 'overstay', cameraId: 'CAM_01', message: 'Overstay test' },
+    );
+    assert.equal(result.alert.type, 'overstay');
+    assert.equal(result.alert.cameraId, 'CAM_01');
+    assert.deepEqual(emitted, [{ name: 'alert:new', value: result.alert }]);
+  } finally {
+    Alert.create = originalCreate;
+  }
+});

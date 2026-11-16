@@ -168,6 +168,12 @@ export async function handleEvent(io, ev) {
         message: ev.message || `Stolen vehicle detected${plate ? `: ${plate}` : ''}`,
         snapshot: ev.snapshot || null,
       }) };
+    case 'overstay':
+      return { alert: await raiseAlert(io, {
+        type: 'overstay', severity: 'low', plate, cameraId, slotId,
+        message: ev.message || 'Vehicle exceeded the configured parking duration',
+        snapshot: ev.snapshot || null,
+      }) };
     default: {
       const err = new Error(`Unknown event type: ${type}`);
       err.status = 400;
