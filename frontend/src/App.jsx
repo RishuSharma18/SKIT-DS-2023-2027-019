@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { io } from 'socket.io-client';
 import { ackAlert, getAiHealth, getAlerts, getBackendHealth, getHourlyAnalytics, getSessions, getSlots, getStats } from './api.js';
 import AlertList from './components/AlertList.jsx';
 import HourlyTraffic from './components/HourlyTraffic.jsx';
@@ -12,18 +11,19 @@ import PanelState from './components/PanelState.jsx';
 import WatchlistPanel from './components/WatchlistPanel.jsx';
 
 const formatUpdated = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-const hasCameraMapHealth = (health) => {
-  if (!health
-      || typeof health.cameraId !== 'string'
-      || !health.cameraId.trim()
-      || !['video', 'webcam', 'network'].includes(health.sourceMode)
-      || !Array.isArray(health.configuredSlotIds)
-      || !Array.isArray(health.configuredSlots)) {
-    return false;
-  }
-  const slotIds = health.configuredSlots.map((slot) => slot?.slotId);
-  return slotIds.length === health.configuredSlotIds.length
-    && health.configuredSlotIds.every((slotId) => slotIds.includes(slotId));
+const cameraMapHealth = (health) => {
+  const camera = health?.cameras?.find((item) => item.cameraId === health.cameraId)
+    || health?.cameras?.[0]
+    || health;
+  if (typeof camera?.cameraId !== 'string'
+      || !camera.cameraId.trim()
+      || !['video', 'webcam', 'network'].includes(camera.sourceMode)
+      || !Array.isArray(camera.configuredSlotIds)
+      || !Array.isArray(camera.configuredSlots)) return null;
+  const slotIds = camera.configuredSlots.map((slot) => slot?.slotId);
+  if (slotIds.length !== camera.configuredSlotIds.length
+      || !camera.configuredSlotIds.every((slotId) => slotIds.includes(slotId))) return null;
+  return { ...health, ...camera };
 };
 const INITIAL_PANEL_STATES = {
   slots: { loading: true, error: '' },
@@ -97,20 +97,21 @@ export default function App() {
     setBackendHealth(backendResult.status === 'fulfilled'
       ? { status: 'online' }
       : { status: 'offline', error: backendResult.reason.message });
-    setAiHealth(aiResult.status === 'fulfilled'
+    const cameraHealth = aiResult.status === 'fulfilled'
+      ? cameraMapHealth(aiResult.value)
+      : null;
+    setAiHealth(aiResult.status === 'fulfilled' && cameraHealth
       ? {
-        status: hasCameraMapHealth(aiResult.value) ? 'online' : 'outdated',
-        error: hasCameraMapHealth(aiResult.value)
-          ? undefined
-          : 'The AI service is responding with an outdated health API. Restart it from this project checkout.',
+        status: ['error', 'reconnecting'].includes(cameraHealth.status) ? 'offline' : 'online',
+        error: cameraHealth.error || undefined,
         ocrEnabled: aiResult.value.ocrEnabled,
         durationModelAvailable: aiResult.value.durationModelAvailable,
         durationModelMetrics: aiResult.value.durationModelMetrics,
-        cameraId: aiResult.value.cameraId,
-        sourceMode: aiResult.value.sourceMode,
-        configuredSlotIds: aiResult.value.configuredSlotIds || [],
-        configuredSlots: aiResult.value.configuredSlots || [],
-        slotConfigError: aiResult.value.slotConfigError,
+        cameraId: cameraHealth.cameraId,
+        sourceMode: cameraHealth.sourceMode,
+        configuredSlotIds: cameraHealth.configuredSlotIds,
+        configuredSlots: cameraHealth.configuredSlots,
+        slotConfigError: cameraHealth.error,
         inferenceImageSize: aiResult.value.inferenceImageSize,
         confidence: aiResult.value.confidence,
         tiledInference: aiResult.value.tiledInference,
@@ -121,7 +122,9 @@ export default function App() {
         durationModelAvailable: false,
         configuredSlotIds: [],
         configuredSlots: [],
-        error: aiResult.reason.message,
+        error: aiResult.status === 'rejected'
+          ? aiResult.reason.message
+          : 'The AI service health response does not include a valid camera configuration.',
       });
   }, []);
 
@@ -139,41 +142,61 @@ export default function App() {
     refreshHealth();
     const healthInterval = window.setInterval(refreshHealth, 30_000);
 
-    const socket = io();
-    socket.on('connect', () => setConnection('connected'));
-    socket.on('disconnect', () => setConnection('disconnected'));
-    socket.on('connect_error', () => setConnection('disconnected'));
-    socket.on('camera:occupancy', (occupancy) => {
-      setCameraOccupancy({ ...occupancy, receivedAt: Date.now() });
-    });
-    socket.on('slots:update', (nextSlots) => {
-      setSlots(nextSlots);
-      setPanelStates((current) => ({ ...current, slots: { loading: false, error: '' } }));
-      setLastUpdated(new Date());
-      loadDashboard(['stats']);
-    });
-    socket.on('alert:new', (alert) => {
-      setAlerts((current) => [alert, ...current.filter((item) => item._id !== alert._id)]);
-      setPanelStates((current) => ({ ...current, alerts: { loading: false, error: '' } }));
-      setLastUpdated(new Date());
-      loadDashboard(['stats']);
-    });
-    socket.on('session:new', (session) => {
-      setSessions((current) => [session, ...current.filter((item) => item._id !== session._id)]);
-      setPanelStates((current) => ({ ...current, sessions: { loading: false, error: '' } }));
-      setLastUpdated(new Date());
-      loadDashboard(['stats', 'analytics']);
-    });
-    socket.on('session:update', (session) => {
-      setSessions((current) => current.map((item) => (item._id === session._id ? session : item)));
-      setPanelStates((current) => ({ ...current, sessions: { loading: false, error: '' } }));
-      setLastUpdated(new Date());
-      loadDashboard(['stats']);
-    });
+    let disposed = false;
+    let reconnectTimer;
+    let socket;
+    const connect = () => {
+      if (disposed) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const activeSocket = new WebSocket(`${protocol}//${window.location.host}/ws/events`);
+      socket = activeSocket;
+      activeSocket.onopen = () => setConnection('connected');
+      activeSocket.onclose = () => {
+        setConnection('disconnected');
+        if (!disposed) reconnectTimer = window.setTimeout(connect, 2000);
+      };
+      activeSocket.onerror = () => activeSocket.close();
+      activeSocket.onmessage = ({ data }) => {
+        let message;
+        try {
+          message = JSON.parse(data);
+        } catch (error) {
+          console.error('Could not parse a realtime event.', error);
+          return;
+        }
+        const { event, payload } = message;
+        if (event === 'camera:occupancy') {
+          setCameraOccupancy({ ...payload, receivedAt: Date.now() });
+        } else if (event === 'slots:update') {
+          setSlots(payload);
+          setPanelStates((current) => ({ ...current, slots: { loading: false, error: '' } }));
+          setLastUpdated(new Date());
+          loadDashboard(['stats']);
+        } else if (event === 'alert:new') {
+          setAlerts((current) => [payload, ...current.filter((item) => item._id !== payload._id)]);
+          setPanelStates((current) => ({ ...current, alerts: { loading: false, error: '' } }));
+          setLastUpdated(new Date());
+          loadDashboard(['stats']);
+        } else if (event === 'session:new') {
+          setSessions((current) => [payload, ...current.filter((item) => item._id !== payload._id)]);
+          setPanelStates((current) => ({ ...current, sessions: { loading: false, error: '' } }));
+          setLastUpdated(new Date());
+          loadDashboard(['stats', 'analytics']);
+        } else if (event === 'session:update') {
+          setSessions((current) => current.map((item) => (item._id === payload._id ? payload : item)));
+          setPanelStates((current) => ({ ...current, sessions: { loading: false, error: '' } }));
+          setLastUpdated(new Date());
+          loadDashboard(['stats']);
+        }
+      };
+    };
+    connect();
 
     return () => {
+      disposed = true;
       window.clearInterval(healthInterval);
-      socket.disconnect();
+      window.clearTimeout(reconnectTimer);
+      socket?.close();
     };
   }, [loadDashboard, refreshHealth]);
 
@@ -214,6 +237,7 @@ export default function App() {
     && feedAvailable
     && !feedLoading;
   const occupancyVerified = liveOccupancyVerified || replayOccupancyAvailable;
+  const detectionSummary = occupancyVerified ? cameraOccupancy?.detectionSummary : null;
   const occupiedSlotIds = new Set(cameraOccupancy?.occupiedSlotIds || []);
   const configuredSlotDefinitions = new Map(
     (aiHealth.configuredSlots || []).map((slot) => [slot.slotId, slot])
@@ -359,15 +383,15 @@ export default function App() {
               <div className="stat-value">{occupancyVerified ? occupied : '—'}</div>
               <div className="stat-foot"><span className="mini-dot blue-dot" />{occupancyVerified ? replayOccupancyAvailable ? 'Detected occupied bays · replay' : 'Current camera occupancy' : 'Requires a camera and mapped spaces'}</div>
             </article>
-            <article className={`stat-card ${!liveOccupancyVerified || summaryOpen ? 'stat-amber' : 'stat-green'}`}>
-              <div className="stat-top"><span>SAVED OPEN ALERTS</span><span className="stat-icon">⚑</span></div>
-              <div className="stat-value">{liveOccupancyVerified ? (statsUnavailable || alertsUnavailable ? '—' : stats?.openAlerts ?? open) : '—'}</div>
-              <div className="stat-foot"><span className={`mini-dot ${!liveOccupancyVerified || alertsUnavailable || summaryOpen ? 'amber-dot' : 'green-dot'}`} />{!liveOccupancyVerified ? 'Current camera alerts not verified' : alertsUnavailable ? 'Alert history unavailable' : summaryOpen ? 'Saved alerts need review' : 'No saved open alerts'}</div>
+            <article className={`stat-card ${isVideoReplay ? 'stat-blue' : !liveOccupancyVerified || summaryOpen ? 'stat-amber' : 'stat-green'}`}>
+              <div className="stat-top"><span>{isVideoReplay ? 'VEHICLES IN CURRENT FRAME' : 'SAVED OPEN ALERTS'}</span><span className="stat-icon">{isVideoReplay ? '▣' : '⚑'}</span></div>
+              <div className="stat-value">{isVideoReplay ? detectionSummary?.total ?? '—' : liveOccupancyVerified ? (statsUnavailable || alertsUnavailable ? '—' : stats?.openAlerts ?? open) : '—'}</div>
+              <div className="stat-foot"><span className={`mini-dot ${isVideoReplay ? 'blue-dot' : !liveOccupancyVerified || alertsUnavailable || summaryOpen ? 'amber-dot' : 'green-dot'}`} />{isVideoReplay ? detectionSummary ? `${detectionSummary.bikes} bikes · ${detectionSummary.cars} cars tracked` : 'Waiting for current-frame detections' : !liveOccupancyVerified ? 'Current camera alerts not verified' : alertsUnavailable ? 'Alert history unavailable' : summaryOpen ? 'Saved alerts need review' : 'No saved open alerts'}</div>
             </article>
             <article className="stat-card stat-violet">
-              <div className="stat-top"><span>TODAY’S ENTRIES</span><span className="stat-icon">↗</span></div>
-              <div className="stat-value">{liveOccupancyVerified && !statsUnavailable ? stats?.todayEntries ?? '—' : '—'}</div>
-              <div className="stat-foot"><span className="mini-dot violet-dot" />{liveOccupancyVerified ? 'Backend entries saved today' : 'Current camera entries not verified'}</div>
+              <div className="stat-top"><span>{isVideoReplay ? 'VEHICLE CLASS COVERAGE' : 'TODAY’S ENTRIES'}</span><span className="stat-icon">{isVideoReplay ? '◉' : '↗'}</span></div>
+              <div className="stat-value">{isVideoReplay ? detectionSummary ? `${detectionSummary.bikes} / ${detectionSummary.cars}` : '—' : liveOccupancyVerified && !statsUnavailable ? stats?.todayEntries ?? '—' : '—'}</div>
+              <div className="stat-foot"><span className="mini-dot violet-dot" />{isVideoReplay ? 'Bikes / cars · SUVs are labeled as cars' : liveOccupancyVerified ? 'Backend entries saved today' : 'Current camera entries not verified'}</div>
             </article>
           </section>
 

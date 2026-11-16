@@ -14,6 +14,13 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/ai/, ''),
       },
       '/uploads': 'http://localhost:5000',
+      '/media': {
+        target: process.env.AI_SERVICE_URL || 'http://localhost:8001',
+      },
+      '/ws/events': {
+        target: 'ws://localhost:5000',
+        ws: true,
+      },
       '/socket.io': { target: 'http://localhost:5000', ws: true },
     },
   },

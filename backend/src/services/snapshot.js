@@ -21,7 +21,8 @@ export function saveSnapshot(snapshotData) {
   if (!trimmed) return null;
 
   // Already a URL or upload path
-  if (trimmed.startsWith('/uploads/') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+  if (trimmed.startsWith('/uploads/') || trimmed.startsWith('/media/alerts/')
+      || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
   }
   if (trimmed.startsWith('uploads/')) {

@@ -193,6 +193,7 @@ h2 { margin: 0; color: #273448; font: 700 14px/1.35 'Segoe UI', sans-serif; lett
 .slot-status-mark { position: absolute; top: 9px; right: 9px; color: #38a775; font-size: 9px; }
 .slot.occupied .slot-status-mark { color: #d76b65; }
 .slot.reserved .slot-status-mark { color: #d69a45; }
+.slot.violation .slot-status-mark, .slot.violation .slot-status-label { color: #b43e52; }
 .slot b { color: #354257; font-size: 10px; font-weight: 700; }
 .slot small { color: #8793a3; font-size: 8px; text-transform: capitalize; }
 .slot-status-label { color: #42916f; font-size: 7px; font-weight: 600; }

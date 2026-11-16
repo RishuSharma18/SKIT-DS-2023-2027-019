@@ -1,9 +1,14 @@
-const STATUS_LABELS = { free: 'Available', occupied: 'Occupied', reserved: 'Reserved' };
-const STATUS_MARKS = { free: '✓', occupied: '●', reserved: '◆', unknown: '?' };
+const STATUS_LABELS = {
+  free: 'Available',
+  occupied: 'Occupied',
+  reserved: 'Reserved',
+  violation: 'Violation',
+};
+const STATUS_MARKS = { free: '✓', occupied: '●', reserved: '◆', violation: '!', unknown: '?' };
 
 export default function SlotGrid({ slots, verified = false }) {
   if (!slots.length) {
-    return <div className="empty-state slot-empty"><span className="empty-icon" aria-hidden="true">⌖</span><b>No camera-mapped spaces configured</b><span>Configure parking-space polygons in the AI service camera map.</span></div>;
+    return <div className="empty-state slot-empty"><span className="empty-icon" aria-hidden="true">⌖</span><b>No camera-mapped spaces configured</b><span>Configure camera-space polygons in the backend, then restart the AI worker.</span></div>;
   }
 
   return (

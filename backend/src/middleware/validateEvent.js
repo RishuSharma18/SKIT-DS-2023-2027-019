@@ -8,7 +8,7 @@ export default function validateEvent(req, res, next) {
     return res.status(400).json({ error: 'Payload must be a JSON object' });
   }
 
-  const { type, trackId, trackIds, slotId, slots, occupiedSlotIds, sourceMode, plate, vehicleType, snapshot } = ev;
+  const { type, trackId, trackIds, slotId, slots, occupiedSlotIds, sourceMode, detectionSummary, plate, vehicleType, snapshot } = ev;
 
   if (!type || typeof type !== 'string' || !type.trim()) {
     return res.status(400).json({ error: 'Missing or empty required field: type' });
@@ -63,7 +63,7 @@ export default function validateEvent(req, res, next) {
       && slots.length <= 500
       && slots.every((slot) => slot && typeof slot.slotId === 'string'
         && slot.slotId.trim() === slot.slotId && slot.slotId.length > 0
-        && ['bike', 'car', 'suv'].includes(slot.type));
+        && ['bike', 'car', 'suv', 'heavy_vehicle'].includes(slot.type));
     const slotIds = validSlots ? slots.map((slot) => slot.slotId) : [];
     if (!validSlots || new Set(slotIds).size !== slotIds.length
         || !Array.isArray(occupiedSlotIds)
@@ -76,11 +76,24 @@ export default function validateEvent(req, res, next) {
     if (!['video', 'webcam', 'network'].includes(sourceMode)) {
       return res.status(400).json({ error: 'Occupancy sourceMode must be video, webcam, or network' });
     }
+    if (detectionSummary !== undefined) {
+      const { total, bikes, cars } = detectionSummary && typeof detectionSummary === 'object'
+        ? detectionSummary
+        : {};
+      if (!Number.isSafeInteger(total) || total < 0
+          || !Number.isSafeInteger(bikes) || bikes < 0
+          || !Number.isSafeInteger(cars) || cars < 0
+          || total !== bikes + cars) {
+        return res.status(400).json({
+          error: 'detectionSummary must contain non-negative integer total, bikes, and cars counts that add up',
+        });
+      }
+    }
   }
 
-  if (vehicleType && !['bike', 'car', 'suv'].includes(vehicleType)) {
+  if (vehicleType && !['bike', 'car', 'suv', 'heavy_vehicle'].includes(vehicleType)) {
     return res.status(400).json({
-      error: `Invalid vehicleType: "${vehicleType}". Allowed values: bike, car, suv`,
+      error: `Invalid vehicleType: "${vehicleType}". Allowed values: bike, car, suv, heavy_vehicle`,
     });
   }
 

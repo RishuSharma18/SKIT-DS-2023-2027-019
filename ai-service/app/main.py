@@ -1,4 +1,5 @@
-"""FastAPI endpoints for AI service health, duration estimates, and video."""
+"""FastAPI endpoints for camera streams, health, and duration estimates."""
+from contextlib import asynccontextmanager
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -6,13 +7,30 @@ from typing import Literal
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config
+from .api.event_dispatcher import EventDispatcher
+from .api.streams import StreamManager
 
-app = FastAPI(title="Smart CCTV AI Service")
+
+@asynccontextmanager
+async def lifespan(application):
+    dispatcher = EventDispatcher().start()
+    stream_manager = StreamManager(dispatcher=dispatcher).start()
+    application.state.dispatcher = dispatcher
+    application.state.stream_manager = stream_manager
+    try:
+        yield
+    finally:
+        stream_manager.stop()
+        dispatcher.close()
+
+
+app = FastAPI(title="Smart CCTV AI Service", lifespan=lifespan)
 MODEL_PATH = Path(__file__).resolve().parent.parent / "ml" / "models" / "duration.joblib"
 METRICS_PATH = MODEL_PATH.with_name("duration_metrics.json")
 FEATURE_COLUMNS = [
@@ -38,37 +56,42 @@ def _load_duration_model():
 
 
 @app.get("/health")
-def health():
+def health(request: Request):
     metrics = None
     if METRICS_PATH.is_file():
         metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
-    try:
-        slot_data = json.loads(config.SLOTS_PATH.read_text(encoding="utf-8"))
-        configured_slot_ids = [slot["slotId"] for slot in slot_data["slots"]]
-        slot_config_error = None
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-        configured_slot_ids = []
-        slot_config_error = str(error)
-
+    manager = getattr(request.app.state, "stream_manager", None)
+    cameras = manager.health() if manager else [
+        {
+            "cameraId": camera_id,
+            "sourceMode": config.source_mode(source),
+            "configuredSlotIds": [],
+            "configuredSlots": [],
+            "status": "starting",
+            "error": None,
+        }
+        for camera_id, source in config.CAMERA_STREAMS.items()
+    ]
     return {
         "ok": True,
         "ocrEnabled": config.ENABLE_OCR,
         "durationModelAvailable": MODEL_PATH.is_file(),
         "durationModelMetrics": metrics,
-        "cameraId": config.CAMERA_ID,
-        "sourceMode": config.SOURCE_MODE,
-        "configuredSlotIds": configured_slot_ids,
-        "configuredSlots": [
-            {"slotId": slot["slotId"], "type": slot["type"]}
-            for slot in slot_data.get("slots", [])
-        ] if slot_config_error is None else [],
-        "slotConfigError": slot_config_error,
+        "cameras": cameras,
         "inferenceImageSize": config.YOLO_IMAGE_SIZE,
         "confidence": config.CONFIDENCE,
         "tiledInference": True,
         "tileOverlap": config.TILE_OVERLAP,
-        "tracker": "ByteTrack",
+        "tracker": config.TRACKER,
     }
+
+
+@app.get("/health/cameras")
+def camera_health(request: Request):
+    manager = getattr(request.app.state, "stream_manager", None)
+    if manager is None:
+        return {"cameras": []}
+    return {"cameras": manager.health()}
 
 
 @app.post("/ml/predict-duration")
@@ -105,17 +128,27 @@ def predict_duration(request: DurationRequest):
     }
 
 
-def _mjpeg():
-    import cv2
-
-    from .pipeline import Pipeline
-
-    for frame in Pipeline().run():
-        ok, buf = cv2.imencode(".jpg", frame)
-        if ok:
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
-
-
 @app.get("/stream")
-def stream():
-    return StreamingResponse(_mjpeg(), media_type="multipart/x-mixed-replace; boundary=frame")
+def stream(request: Request):
+    return video_feed(config.CAMERA_ID, request)
+
+
+@app.get("/video_feed/{camera_id}")
+def video_feed(camera_id: str, request: Request):
+    manager = getattr(request.app.state, "stream_manager", None)
+    worker = manager.get(camera_id) if manager else None
+    if worker is None:
+        raise HTTPException(status_code=404, detail=f"Unknown camera: {camera_id}")
+    if worker.status == "error":
+        raise HTTPException(status_code=503, detail=worker.error or "Camera stream failed to start")
+    return StreamingResponse(
+        worker.iter_mjpeg(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+app.mount(
+    "/media/alerts",
+    StaticFiles(directory=str(config.EVENT_SNAPSHOT_DIR), check_dir=False),
+    name="alert-snapshots",
+)

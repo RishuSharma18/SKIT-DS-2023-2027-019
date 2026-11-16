@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "test": "node --test",
     "seed": "node src/scripts/seed.js",
+    "seed-zones": "node src/scripts/seedFromSlots.js",
     "simulate": "node src/scripts/simulate.js"
   },
   "dependencies": {

@@ -2,7 +2,12 @@ import ParkingSlot from '../models/ParkingSlot.js';
 
 // Which slot types can hold which vehicle category (best fit first).
 // Bhumi: replace/extend with the ML-based recommender later.
-const FIT = { bike: ['bike'], car: ['car', 'suv'], suv: ['suv'] };
+const FIT = {
+  bike: ['bike'],
+  car: ['car', 'suv'],
+  suv: ['suv'],
+  heavy_vehicle: ['heavy_vehicle'],
+};
 
 export async function recommendSlot(vehicleType = 'car', slotIds = []) {
   const types = FIT[vehicleType] || FIT.car;

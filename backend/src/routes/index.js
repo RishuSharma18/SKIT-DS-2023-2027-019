@@ -3,16 +3,128 @@ import ParkingSlot from '../models/ParkingSlot.js';
 import ParkingSession from '../models/ParkingSession.js';
 import Watchlist from '../models/Watchlist.js';
 import Alert from '../models/Alert.js';
+import CameraZone from '../models/CameraZone.js';
 import apiKey from '../middleware/apiKey.js';
 import validateEvent from '../middleware/validateEvent.js';
+import validateAiEvent from '../middleware/validateAiEvent.js';
 import { handleEvent } from '../services/events.js';
+import { handleAiEvent } from '../services/aiEvents.js';
 import { recommendSlot } from '../services/allocation.js';
 
 const r = Router();
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const TYPE_TO_CATEGORY = {
+  bike: 'TWO_WHEELER',
+  car: 'COMPACT_CAR',
+  suv: 'SUV_SEDAN',
+  heavy_vehicle: 'HEAVY_VEHICLE',
+};
+const CATEGORY_TO_TYPE = Object.fromEntries(
+  Object.entries(TYPE_TO_CATEGORY).map(([type, category]) => [category, type]),
+);
+const STATUS_TO_CATEGORY = {
+  free: 'AVAILABLE',
+  occupied: 'OCCUPIED',
+  reserved: 'RESERVED',
+  violation: 'VIOLATION',
+};
+const isPolygon = (polygon) => Array.isArray(polygon) && polygon.length >= 3
+  && polygon.every((point) => Array.isArray(point) && point.length === 2
+    && point.every((coordinate) => Number.isFinite(coordinate)));
+const hasUniqueIds = (items, key) => {
+  const ids = items.map((item) => item && typeof item === 'object' ? item[key] : undefined);
+  return ids.every((id) => typeof id === 'string' && id.trim() === id && id.length > 0)
+    && new Set(ids).size === ids.length;
+};
+const validateZoneConfig = (body) => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  if (body.no_parking_zones !== undefined
+      && (!Array.isArray(body.no_parking_zones)
+        || !hasUniqueIds(body.no_parking_zones, 'zone_id')
+        || !body.no_parking_zones.every((zone) => isPolygon(zone.polygon)))) return false;
+  if (body.tripwires !== undefined
+      && (!Array.isArray(body.tripwires)
+        || !hasUniqueIds(body.tripwires, 'tripwire_id')
+        || !body.tripwires.every((wire) => ['ENTRY', 'EXIT'].includes(wire.event_type)
+          && Array.isArray(wire.line) && wire.line.length === 2
+          && wire.line.every((point) => Array.isArray(point) && point.length === 2
+            && point.every((coordinate) => Number.isFinite(coordinate)))))) return false;
+  if (body.slots !== undefined
+      && (!Array.isArray(body.slots)
+        || !hasUniqueIds(body.slots, 'slot_id')
+        || !body.slots.every((slot) => typeof slot.slot_id === 'string'
+          && CATEGORY_TO_TYPE[slot.vehicle_category]
+          && isPolygon(slot.polygon)))) return false;
+  return ['slots', 'no_parking_zones', 'tripwires'].some((key) => body[key] !== undefined);
+};
 
 r.get('/health', (req, res) => res.json({ ok: true, time: new Date() }));
+
+// ---- Shared camera zone configuration and AI event contract
+r.get('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
+  const [slots, zones] = await Promise.all([
+    ParkingSlot.find({ cameraId: req.params.cameraId }).lean(),
+    CameraZone.findOne({ camera_id: req.params.cameraId }).lean(),
+  ]);
+  res.json({
+    camera_id: req.params.cameraId,
+    slots: slots.filter((slot) => slot.polygon?.length >= 3).map((slot) => ({
+      slot_id: slot.slotId,
+      vehicle_category: TYPE_TO_CATEGORY[slot.type],
+      status: STATUS_TO_CATEGORY[slot.status] || 'AVAILABLE',
+      polygon: slot.polygon,
+    })),
+    no_parking_zones: zones?.no_parking_zones || [],
+    tripwires: zones?.tripwires || [],
+  });
+}));
+
+r.put('/v1/cameras/:cameraId/zones', apiKey, wrap(async (req, res) => {
+  if (!validateZoneConfig(req.body)) {
+    return res.status(400).json({
+      error: 'Zones require polygon arrays with at least three [x,y] points; tripwires require two [x,y] endpoints and ENTRY or EXIT.',
+    });
+  }
+  if (req.body.slots) {
+    const operations = req.body.slots.map((slot) => ({
+      updateOne: {
+        filter: { slotId: slot.slot_id },
+        update: {
+          $set: {
+            cameraId: req.params.cameraId,
+            type: CATEGORY_TO_TYPE[slot.vehicle_category],
+            polygon: slot.polygon,
+          },
+          $setOnInsert: {
+            slotId: slot.slot_id,
+            zone: slot.slot_id.includes('-') ? slot.slot_id.slice(0, slot.slot_id.lastIndexOf('-')) : 'A',
+          },
+        },
+        upsert: true,
+      },
+    }));
+    if (operations.length) await ParkingSlot.bulkWrite(operations);
+  }
+
+  const zoneUpdate = {};
+  for (const key of ['no_parking_zones', 'tripwires']) {
+    if (req.body[key] !== undefined) zoneUpdate[key] = req.body[key];
+  }
+  const zones = Object.keys(zoneUpdate).length
+    ? await CameraZone.findOneAndUpdate(
+      { camera_id: req.params.cameraId },
+      { $set: zoneUpdate, $setOnInsert: { camera_id: req.params.cameraId } },
+      { new: true, upsert: true, runValidators: true },
+    )
+    : null;
+  res.json({ ok: true, zones });
+}));
+
+r.post('/v1/ai-events', apiKey, validateAiEvent, wrap(async (req, res) => {
+  const result = await handleAiEvent(req.app.get('io'), req.body);
+  res.status(result.duplicate ? 200 : 201).json(result);
+}));
 
 // ---- Stats (parking overview)
 r.get('/stats', wrap(async (req, res) => {

@@ -55,7 +55,7 @@ export async function handleEvent(io, ev) {
     }
     case 'plate': {
       const session = await ParkingSession.findOneAndUpdate(
-        { trackId, status: 'active' }, { plate }, { new: true, sort: { createdAt: -1 } }
+        { trackId, cameraId, status: 'active' }, { plate }, { new: true, sort: { createdAt: -1 } }
       );
       await checkWatchlist(io, plate, cameraId, session?.slotId ?? null, ev.snapshot);
       if (session) emitRealtime(io, 'session:update', session);
@@ -63,7 +63,7 @@ export async function handleEvent(io, ev) {
     }
     case 'parked': {
       const session = await ParkingSession.findOneAndUpdate(
-        { trackId, status: 'active' }, { slotId }, { new: true, sort: { createdAt: -1 } }
+        { trackId, cameraId, status: 'active' }, { slotId }, { new: true, sort: { createdAt: -1 } }
       );
       if (slotId) {
         await ParkingSlot.updateOne(
@@ -74,7 +74,7 @@ export async function handleEvent(io, ev) {
       return { session };
     }
     case 'exit': {
-      const session = await ParkingSession.findOne({ trackId, status: 'active' }).sort({ createdAt: -1 });
+      const session = await ParkingSession.findOne({ trackId, cameraId, status: 'active' }).sort({ createdAt: -1 });
       if (!session) return { session: null };
       session.exitTime = ev.timestamp ? new Date(ev.timestamp) : new Date();
       session.durationSec = Math.round((session.exitTime - session.entryTime) / 1000);
@@ -95,6 +95,7 @@ export async function handleEvent(io, ev) {
           slots: ev.slots,
           slotIds,
           occupiedSlotIds: ev.occupiedSlotIds,
+          detectionSummary: ev.detectionSummary ?? null,
           sourceMode: ev.sourceMode,
         });
         return { slots: slotIds, persisted: false };
@@ -134,6 +135,7 @@ export async function handleEvent(io, ev) {
         slots: ev.slots,
         slotIds,
         occupiedSlotIds: ev.occupiedSlotIds,
+        detectionSummary: ev.detectionSummary ?? null,
         sourceMode: ev.sourceMode,
       });
       return { slots: slotIds, persisted: true };

@@ -24,7 +24,11 @@ from app import config  # noqa: E402
 from app.detection import VehicleDetector, tile_count  # noqa: E402
 from app.vehicle import CLASS_NAMES, categorize  # noqa: E402
 
-COLORS = {"bike": (0, 200, 255), "car": (255, 160, 0)}
+COLORS = {
+    "bike": (0, 200, 255),
+    "car": (255, 160, 0),
+    "heavy_vehicle": (0, 220, 220),
+}
 MAX_SHOW_WIDTH = 1280
 
 
@@ -95,12 +99,14 @@ def main():
                     x1, y1, x2, y2 = map(int, box)
                     color = COLORS[cat]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    label = f"#{tid} {cat}"
+                    confidence = float(track[5]) if len(track) > 5 else 0
+                    label = f"#{tid} {cat} {confidence:.0%}"
                     cv2.putText(frame, label, (x1, max(15, y1 - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
             fps = frames / max(time.time() - t0, 1e-6)
-            hud = (f"frame {frames} | {fps:.1f} fps | bike {counts['bike']}  car {counts['car']} "
+            hud = (f"frame {frames} | {fps:.1f} fps | bike {counts['bike']} "
+                   f"car {counts['car']} heavy {counts['heavy_vehicle']} "
                    f"| unique IDs {len(tracks)}")
             cv2.rectangle(frame, (0, 0), (width, 26), (0, 0, 0), -1)
             cv2.putText(frame, hud, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
