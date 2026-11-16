@@ -1,6 +1,5 @@
-// Makes the database slots match ai-service/config/slots.json.
-// Run from the backend folder:  node src/scripts/seedFromSlots.js
-// WARNING: replaces ALL parking slots in the database (watchlist is not touched).
+// Syncs configured sample-camera polygons without deleting unrelated slots.
+// Run from the backend folder: node src/scripts/seedFromSlots.js [slots.json]
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
@@ -22,11 +21,32 @@ if (!Array.isArray(slots) || slots.length === 0) {
   console.error('slots.json has no slots');
   process.exit(1);
 }
+if (slots.some((slot) => !slot.slotId || !slot.type
+    || !['bike', 'car', 'suv', 'heavy_vehicle'].includes(slot.type)
+    || !Array.isArray(slot.polygon) || slot.polygon.length < 3
+    || slot.polygon.some((point) => !Array.isArray(point) || point.length !== 2
+      || point.some((coordinate) => !Number.isFinite(coordinate))))) {
+  console.error('Every slot needs a slotId, type, and polygon with at least three [x,y] points');
+  process.exit(1);
+}
 
-await connectDB();
-await ParkingSlot.deleteMany({});
-await ParkingSlot.insertMany(
-  slots.map((s) => ({ slotId: s.slotId, zone: s.slotId.split('-')[0], type: s.type }))
-);
-console.log(`Database now has ${slots.length} slots: ${slots.map((s) => `${s.slotId}(${s.type})`).join(', ')}`);
-await mongoose.disconnect();
+const cameraId = process.env.CAMERA_ID || 'cam-1';
+try {
+  await connectDB();
+  await ParkingSlot.bulkWrite(slots.map((slot) => ({
+    updateOne: {
+      filter: { slotId: slot.slotId },
+      update: {
+        $set: { cameraId, type: slot.type, polygon: slot.polygon },
+        $setOnInsert: {
+          slotId: slot.slotId,
+          zone: slot.slotId.includes('-') ? slot.slotId.slice(0, slot.slotId.lastIndexOf('-')) : 'A',
+        },
+      },
+      upsert: true,
+    },
+  })));
+  console.log(`Synced ${slots.length} slot polygons for camera ${cameraId}: ${slots.map((slot) => slot.slotId).join(', ')}`);
+} finally {
+  await mongoose.disconnect();
+}

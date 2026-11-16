@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from app.detection import frame_tiles, suppress_duplicate_detections, tile_count
+from app.detection import frame_tiles, summarize_tracks, suppress_duplicate_detections, tile_count
 
 
 class TiledDetectionTests(unittest.TestCase):
@@ -36,6 +36,19 @@ class TiledDetectionTests(unittest.TestCase):
     def test_nms_accepts_no_detections(self):
         result = suppress_duplicate_detections(np.empty((0, 6), dtype=np.float32))
         self.assertEqual(result.shape, (0, 6))
+
+    def test_summarize_tracks_counts_only_supported_vehicle_classes(self):
+        tracks = np.array([
+            [0, 0, 10, 10, 1, 0.9, 2],
+            [0, 0, 10, 10, 2, 0.8, 3],
+            [0, 0, 10, 10, 3, 0.7, 2],
+            [0, 0, 10, 10, 4, 0.6, 5],
+            [0, 0, 10, 10, 5, 0.5, 7],
+        ], dtype=np.float32)
+        self.assertEqual(summarize_tracks(tracks), {"bikes": 1, "cars": 4, "total": 5})
+
+    def test_summarize_tracks_handles_empty_frame(self):
+        self.assertEqual(summarize_tracks([]), {"bikes": 0, "cars": 0, "total": 0})
 
 
 if __name__ == "__main__":

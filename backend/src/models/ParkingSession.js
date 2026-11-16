@@ -5,7 +5,7 @@ const sessionSchema = new mongoose.Schema(
     trackId: { type: Number, index: true }, // temporary ID from the tracker
     cameraId: { type: String, default: 'cam-1' },
     plate: { type: String, default: null, index: true },
-    vehicleType: { type: String, enum: ['bike', 'car', 'suv'], default: 'car' },
+    vehicleType: { type: String, enum: ['bike', 'car', 'suv', 'heavy_vehicle'], default: 'car' },
     slotId: { type: String, default: null },
     entryTime: { type: Date, default: Date.now },
     exitTime: { type: Date, default: null },

@@ -26,6 +26,7 @@ test('occupancy event updates only mapped slots and emits current slot state', a
       sourceMode: 'network',
       slots: [{ slotId: 'A-04', type: 'car' }, { slotId: 'A-05', type: 'car' }],
       occupiedSlotIds: ['A-05'],
+      detectionSummary: { total: 3, bikes: 1, cars: 2 },
     });
 
     assert.deepEqual(operations, [
@@ -54,6 +55,7 @@ test('occupancy event updates only mapped slots and emits current slot state', a
         slots: [{ slotId: 'A-04', type: 'car' }, { slotId: 'A-05', type: 'car' }],
         slotIds: ['A-04', 'A-05'],
         occupiedSlotIds: ['A-05'],
+        detectionSummary: { total: 3, bikes: 1, cars: 2 },
         sourceMode: 'network',
       },
     });
@@ -75,6 +77,7 @@ test('sample video occupancy updates broadcast estimates without saving slot sta
       sourceMode: 'video',
       slots: [{ slotId: 'A-04', type: 'car' }],
       occupiedSlotIds: ['A-04'],
+      detectionSummary: { total: 2, bikes: 0, cars: 2 },
     });
 
     assert.deepEqual(result, { slots: ['A-04'], persisted: false });
@@ -85,6 +88,7 @@ test('sample video occupancy updates broadcast estimates without saving slot sta
         slots: [{ slotId: 'A-04', type: 'car' }],
         slotIds: ['A-04'],
         occupiedSlotIds: ['A-04'],
+        detectionSummary: { total: 2, bikes: 0, cars: 2 },
         sourceMode: 'video',
       },
     }]);

@@ -65,6 +65,19 @@ def suppress_duplicate_detections(detections, iou_threshold=config.TILE_NMS_IOU)
     return np.asarray(kept, dtype=np.float32).reshape(-1, 6)
 
 
+def summarize_tracks(tracks):
+    """Count current tracked vehicles by supported COCO vehicle class."""
+    counts = {"bikes": 0, "cars": 0}
+    for track in tracks:
+        class_id = int(track[6])
+        if class_id == 3:
+            counts["bikes"] += 1
+        elif class_id in (2, 5, 7):
+            counts["cars"] += 1
+    counts["total"] = counts["bikes"] + counts["cars"]
+    return counts
+
+
 class VehicleDetector:
     def __init__(self, model_path=config.YOLO_MODEL, confidence=config.CONFIDENCE, image_size=config.YOLO_IMAGE_SIZE):
         self.model = YOLO(model_path)

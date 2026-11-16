@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "test": "node --test",
     "seed": "node src/scripts/seed.js",
+    "seed-zones": "node src/scripts/seedFromSlots.js",
     "simulate": "node src/scripts/simulate.js"
   },
   "dependencies": {
@@ -15,7 +16,8 @@
     "express": "^4.19.2",
     "mongoose": "^8.5.0",
     "morgan": "^1.10.0",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "mongodb-memory-server": "^11.3.0"

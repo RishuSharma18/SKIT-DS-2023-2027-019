@@ -1,16 +1,36 @@
 import 'dotenv/config';
 import http from 'http';
 import { Server } from 'socket.io';
+import { WebSocket, WebSocketServer } from 'ws';
 import createApp from './app.js';
 import connectDB from './config/db.js';
 import { checkOverstays } from './services/events.js';
 
 const app = createApp();
 const server = http.createServer(app);
+const webSocketServer = new WebSocketServer({ noServer: true });
 const io = new Server(server, {
   cors: { origin: process.env.CLIENT_URL || '*' },
 });
 app.set('io', io);
+io.emitWebSocket = (message) => {
+  const serialized = JSON.stringify(message);
+  for (const client of webSocketServer.clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(serialized);
+  }
+};
+
+server.on('upgrade', (request, socket, head) => {
+  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+  if (pathname !== '/ws/events') return;
+  webSocketServer.handleUpgrade(request, socket, head, (client) => {
+    webSocketServer.emit('connection', client, request);
+  });
+});
+
+webSocketServer.on('connection', (client) => {
+  client.send(JSON.stringify({ event: 'connected', payload: { ok: true } }));
+});
 
 io.on('connection', (socket) => {
   console.log('dashboard connected', socket.id);

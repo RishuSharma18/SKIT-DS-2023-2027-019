@@ -3,9 +3,10 @@
 Final-year B.Tech project, CSE (Data Science), SKIT Jaipur, batch 2023-27. Guide: Dr. Nilam Chaudhary.
 
 CCTV video → **AI service** (YOLOv8 + EasyOCR) → **Backend** (Express + MongoDB) → **Dashboard** (React).
+The AI service uses a versioned REST event contract; realtime updates are available over `/ws/events`, while Socket.IO remains supported for older clients.
 
 ```
- ┌──────────┐  frames  ┌─────────────────┐  REST events  ┌────────────────┐  Socket.IO  ┌───────────────┐
+ ┌──────────┐  frames  ┌─────────────────┐  REST events  ┌────────────────┐  WebSocket   ┌───────────────┐
  │ CCTV /   │ ───────► │  ai-service     │ ────────────► │  backend       │ ──────────► │  frontend     │
  │ video    │          │  Python+FastAPI │  x-api-key    │  Node+Express  │  + REST     │  React (Vite) │
  └──────────┘          │  YOLOv8,OpenCV, │               │  MongoDB       │             │  dashboard    │
@@ -16,8 +17,8 @@ CCTV video → **AI service** (YOLOv8 + EasyOCR) → **Backend** (Express + Mong
 ## Folder structure
 | Folder | Owner | What lives here |
 |---|---|---|
-| `ai-service/` | Rishu (detection), Nandani (OCR) | Detection, tracking, plate OCR, slot/violation logic |
-| `backend/` | Vaibhav | REST API, MongoDB models, event handling, alerts, Socket.IO |
+| `ai-service/` | Rishu (detection), Nandani (OCR) | Multi-camera ingestion, detection/tracking, OCR, zone rules |
+| `backend/` | Vaibhav | REST API, MongoDB models, event handling, alerts, realtime events |
 | `frontend/` | Bhumi | React dashboard |
 | `docs/` | everyone | Plan, Git workflow, report material |
 
@@ -33,6 +34,7 @@ cd backend
 cp .env.example .env
 npm install
 npm run seed          # creates 12 slots + 2 demo watchlist plates
+npm run seed-zones    # non-destructively syncs sample-camera polygons from ai-service/config/slots.json
 npm run dev           # http://localhost:5000/api/health
 
 # 3. frontend (terminal 2)
@@ -55,9 +57,9 @@ python tools/draw_slots.py --source samples/parking.mp4 --out config/slots.json
 python tools/detect_demo.py --source samples/parking.mp4 --imgsz 1280 --conf 0.25
 # Larger imgsz can find more distant/small vehicles but is slower; compare with --imgsz 640.
 # Review boxes and IDs; tune CONFIDENCE and YOLO_IMAGE_SIZE in .env for your camera.
-# Run the AI API in this terminal for the dashboard camera stream and health checks:
+# Run the AI API; it loads zones from the backend and starts each configured camera:
 uvicorn app.main:app --host 127.0.0.1 --port 8001
-# For a standalone local preview instead, stop Uvicorn and run:
+# For a standalone local preview instead, keep backend running, stop Uvicorn and run:
 python run_pipeline.py --show
 ```
 
@@ -75,29 +77,41 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 New-Item -ItemType Directory -Force samples | Out-Null
 # Put your parking video at samples\parking.mp4, then:
 python tools\draw_slots.py --source samples\parking.mp4 --out config\slots.json
+# With backend running and seeded, sync these polygons without deleting other parking slots:
+cd ..\backend
+npm run seed-zones
+cd ..\ai-service
 python tools\detect_demo.py --source samples\parking.mp4
 # For dashboard integration, run the AI API on port 8001:
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
-The current `ai-service/config/slots.json` maps five marked car spaces from the included sample video's
+The sample `ai-service/config/slots.json` maps five marked car spaces from the included sample video's
 3840x2160 frame; it is only suitable for that same fixed camera and frame geometry, not a confirmed
 physical facility. The dashboard identifies prerecorded input as video replay and hides live counts
 and recommendations until a webcam or network camera and matching spaces are configured. It only
 displays the spaces mapped by the active camera; occupancy is refreshed from detections in those bays.
-For a live camera, missing mapped slots are registered and their status is synchronized; unrelated
-slots are left alone. Sample-video occupancy is broadcast as a temporary estimate and is not saved,
+For live cameras, set `RTSP_URLS` in `ai-service/.env` to a JSON object or comma-separated
+`CAMERA_ID=RTSP_URL` pairs. Each camera has an independent reconnecting reader, tracker, and
+analytics worker; inspect their state at `/health` and their video at `/video_feed/{camera_id}`.
+The dashboard feed uses the primary configured camera. Slot polygons are fetched from the backend;
+the sample sync script updates only those slots and does not delete unrelated records. Sample-video
+occupancy is broadcast as a temporary estimate and is not saved,
 and replay-generated sessions and alerts are disabled.
 YOLO's COCO classes include motorcycle and car (SUVs are included in car); COCO cannot reliably
 distinguish an SUV from another car. A separately trained classifier is needed for that distinction.
-Entries are created only after a tracked vehicle remains inside a configured bay. Disable OCR in
+Entry/exit events are emitted when a tracked vehicle crosses a configured tripwire or enters/leaves a mapped bay. Disable OCR in
 `.env` with `ENABLE_OCR=0` for detection-only runs when EasyOCR is not needed. Inference defaults
 to 1280px and uses overlapping tiles for high-resolution sources to improve small-vehicle recall, at
 a higher processing cost. Smaller sources use a single full-frame tile. CPU inference may not keep up
 with a live stream; a supported GPU or lower `YOLO_IMAGE_SIZE` may be needed. The camera overlay
 legend explains box/bay colors; blue boxes are detected vehicles, red boxes are confirmed in a mapped
-bay, green bays are available, and red bays are occupied. Detection counts are not ground-truth
-accuracy measurements; validate on annotated frames from the target camera.
+bay, green bays are available, and red bays are occupied. Vehicle boxes also show the model confidence
+score. In video replay mode, the dashboard reports the current tracked-frame total and bike/car counts;
+COCO SUVs are included in cars. Detection counts and confidence are model estimates, not ground-truth
+accuracy measurements; validate on annotated frames from the target camera. COCO bus and truck
+classes map to `HEAVY_VEHICLE`; a separate custom model/class map is required to distinguish SUVs
+from other cars.
 
 ### Test a crash alert end to end
 
@@ -132,11 +146,15 @@ A **stolen_vehicle** alert should appear on the dashboard (that plate is in the 
 | `GET` | `/api/stats` | None | Overview metrics (total slots, free, occupied, active vehicles, today's entries, open alerts) |
 | `GET` | `/api/analytics/hourly` | None | Today's parking entries grouped by hour |
 | `GET` | `/api/slots` | None | List all parking slots and real-time statuses |
-| `GET` | `/api/slots/recommend?vehicleType=car` | None | Recommend best available slot for `bike`, `car`, or `suv` |
+| `GET` | `/api/slots/recommend?vehicleType=car` | None | Recommend best available slot for `bike`, `car`, `suv`, or `heavy_vehicle` |
 | `GET` | `/api/sessions` | None | List parking sessions |
 | `GET` | `/api/alerts` | None | List recent security and safety alerts |
 | `PATCH` | `/api/alerts/:id/ack` | None | Acknowledge/dismiss an alert |
 | `POST` | `/api/events` | `x-api-key` | Ingest AI tracking/safety events (validated payload) |
+| `GET` | `/api/v1/cameras/:cameraId/zones` | `x-api-key` | Fetch slot polygons, no-parking zones, and tripwires |
+| `PUT` | `/api/v1/cameras/:cameraId/zones` | `x-api-key` | Update camera geometry using canonical polygons |
+| `POST` | `/api/v1/ai-events` | `x-api-key` | Ingest versioned canonical AI events |
+| `WS` | `/ws/events` | None | Receive realtime events as `{ "event", "payload" }` JSON |
 
 ## Dashboard service indicators and ML estimate
 The dashboard's live badge reflects the backend Socket.IO connection. Its service strip checks the backend API and AI-service health, camera stream, OCR configuration, and whether the duration model is present. Recognized plates are shown from OCR events saved on parking sessions; safety-alert snapshots link to the backend `/uploads` endpoint.

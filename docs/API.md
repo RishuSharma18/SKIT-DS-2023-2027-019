@@ -33,7 +33,9 @@ Smart CCTV Parking & Vehicle Safety System Backend REST API and Real-Time Teleme
    - [POST /api/events](#post-apievents)
 10. [Static Files](#static-files)
     - [GET /uploads/:filename](#get-uploadsfilename)
-11. [WebSocket Events (Socket.IO)](#websocket-events-socketio)
+11. [Versioned AI Events](#versioned-ai-events)
+12. [Camera Zones](#camera-zones)
+13. [WebSocket Events](#websocket-events)
 
 ---
 
@@ -41,7 +43,7 @@ Smart CCTV Parking & Vehicle Safety System Backend REST API and Real-Time Teleme
 
 All standard queries are public.
 
-The AI event ingestion endpoint (`POST /api/events`) requires an API key in the request header:
+AI event ingestion and camera-zone endpoints require an API key in the request header:
 ```http
 x-api-key: dev-key
 ```
@@ -67,6 +69,10 @@ Endpoints returning collections (`/api/sessions`, `/api/alerts`) return a standa
 ## Static Media Storage
 
 When crash or stolen vehicle events are received with a `snapshot` (base64 image), the server decodes the image, stores it on disk under `backend/uploads/snap-<timestamp>-<hash>.jpg`, and records the relative URL `/uploads/<filename>` in the alert document. Images are served statically via Express.
+
+Snapshots generated directly by the AI service are saved under its configured `EVENT_SNAPSHOT_DIR`
+and exposed at `/media/alerts/:filename`. The frontend development proxy forwards this path to the
+AI service; deployments should route the same path to the AI service or shared media storage.
 
 ---
 
@@ -173,10 +179,10 @@ curl -X GET http://localhost:5000/api/slots
 ---
 
 ### GET /api/slots/recommend
-Recommends the best available parking slot based on vehicle class (`bike`, `car`, `suv`).
+Recommends the best available parking slot based on vehicle class (`bike`, `car`, `suv`, `heavy_vehicle`).
 
 **Query Parameters:**
-- `type` / `vehicleType`: Vehicle class (`bike` | `car` | `suv`, default: `car`).
+- `type` / `vehicleType`: Vehicle class (`bike` | `car` | `suv` | `heavy_vehicle`, default: `car`).
 - `slotIds`: Optional comma-separated slot IDs to limit recommendations to spaces mapped by the active camera.
 
 **Request:**
@@ -428,6 +434,7 @@ occupancy for the dashboard but does not save it to the database or create sessi
   "type": "occupancy",
   "cameraId": "cam-1",
   "sourceMode": "network",
+  "detectionSummary": { "total": 3, "bikes": 1, "cars": 2 },
   "slots": [
     { "slotId": "A-04", "type": "car" },
     { "slotId": "A-05", "type": "car" },
@@ -436,6 +443,10 @@ occupancy for the dashboard but does not save it to the database or create sessi
   "occupiedSlotIds": ["A-05"]
 }
 ```
+
+`detectionSummary` is optional for older clients. When provided, its `total` must equal `bikes + cars`.
+The counts represent tracked vehicles in the current processed frame, not unique arrivals or daily
+totals. The COCO model groups SUVs with cars.
 
 #### 1. Crash Event with Base64 Snapshot
 When `snapshot` (base64 string or data URI) is provided, the backend writes the image to `backend/uploads/` and links the URL `/uploads/snap-...jpg` in the generated Alert document.
@@ -685,7 +696,27 @@ http://localhost:5000/uploads/snap-1731682345678-b2c3d4e5.jpg
 
 ---
 
-## WebSocket Events (Socket.IO)
+## Versioned AI Events
+
+`POST /api/v1/ai-events` accepts canonical event IDs, ISO timestamps, camera and tracking IDs,
+vehicle categories, plate data, slot IDs, event types, alert types, and snapshot paths. The endpoint
+validates the payload, maps it to the existing session and alert logic, and deduplicates event IDs
+for seven days. The original `/api/events` endpoint remains available for dashboard occupancy
+updates and older AI clients.
+
+## Camera Zones
+
+`GET /api/v1/cameras/:cameraId/zones` returns slot polygons stored on parking-slot records, along
+with that camera's optional no-parking polygons and entry/exit tripwires. `PUT` accepts any subset
+of `slots`, `no_parking_zones`, and `tripwires`; slot geometry is upserted without deleting other
+slots. Coordinates are `[x,y]` points in the source camera's pixel space. The AI service fetches
+this configuration when each worker starts.
+
+## WebSocket Events
+
+Connect to `/ws/events` for JSON messages shaped as `{ "event": "alert:new", "payload": ... }`.
+The connection also receives an initial `connected` message. The backend continues to emit the
+same events via Socket.IO for older dashboard clients.
 
 Clients connect to the Socket.IO server at `/` (same port as HTTP server, e.g. `http://localhost:5000`).
 
@@ -695,3 +726,6 @@ Clients connect to the Socket.IO server at `/` (same port as HTTP server, e.g. `
 | `session:new` | Server -> Client | `ParkingSession` object | Emitted when a vehicle enters the parking facility. |
 | `session:update` | Server -> Client | `ParkingSession` object | Emitted when a session's plate, slot, or exit duration is updated. |
 | `slots:update` | Server -> Client | Array of `ParkingSlot` objects | Emitted when parking slot occupancy changes (`free` <-> `occupied`). |
+
+The same event names and payloads are sent as JSON messages on the native WebSocket endpoint
+`/ws/events`; Socket.IO is retained for compatibility.

@@ -52,6 +52,7 @@ test('accepts camera occupancy updates for configured slots', () => {
     sourceMode: 'network',
     slots: [{ slotId: 'A-04', type: 'car' }, { slotId: 'A-05', type: 'car' }],
     occupiedSlotIds: ['A-05'],
+    detectionSummary: { total: 3, bikes: 1, cars: 2 },
   }).continued, true);
 });
 
@@ -63,6 +64,7 @@ test('rejects invalid camera occupancy updates', () => {
     { type: 'occupancy', sourceMode: 'network', slots: [{ slotId: 'A-04', type: 'car' }], occupiedSlotIds: 'A-04' },
     { type: 'occupancy', sourceMode: 'unknown', slots: [{ slotId: 'A-04', type: 'car' }], occupiedSlotIds: [] },
     { type: 'occupancy', sourceMode: 'network', slots: [{ slotId: 'A-04', type: 'unicycle' }], occupiedSlotIds: [] },
+    { type: 'occupancy', sourceMode: 'network', slots: [{ slotId: 'A-04', type: 'car' }], occupiedSlotIds: [], detectionSummary: { total: 2, bikes: 0, cars: 1 } },
   ]) {
     assert.equal(validate(payload).status, 400);
   }
