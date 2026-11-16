@@ -62,6 +62,7 @@ export default function AlertList({ alerts, onAck }) {
                 <p>{alert.message || 'An event requires review.'}</p>
                 <div className="alert-meta">
                   {alert.plate && <code>{alert.plate}</code>}
+                  {alert.trackIds?.length > 0 && <span>Tracks {alert.trackIds.join(' & ')}</span>}
                   {alert.slotId && <span>Slot {alert.slotId}</span>}
                   {alert.cameraId && <span>{alert.cameraId}</span>}
                   <time dateTime={alert.createdAt}>{formatDate(alert.createdAt)}</time>

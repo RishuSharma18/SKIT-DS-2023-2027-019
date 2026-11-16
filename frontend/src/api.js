@@ -22,8 +22,8 @@ export const addWatchlistEntry = (entry) =>
   });
 export const deleteWatchlistEntry = (id) =>
   request(`/api/watchlist/${id}`, { method: 'DELETE' });
-export const recommendSlot = (type) =>
-  request(`/api/slots/recommend?type=${encodeURIComponent(type)}`);
+export const recommendSlot = (type, slotIds) =>
+  request(`/api/slots/recommend?type=${encodeURIComponent(type)}&slotIds=${encodeURIComponent(slotIds.join(','))}`);
 export const getHourlyAnalytics = (date) =>
   request(`/api/analytics/hourly${date ? `?date=${encodeURIComponent(date)}` : ''}`);
 export const getBackendHealth = () => request('/api/health');

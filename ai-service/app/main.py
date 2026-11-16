@@ -42,11 +42,32 @@ def health():
     metrics = None
     if METRICS_PATH.is_file():
         metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8"))
+    try:
+        slot_data = json.loads(config.SLOTS_PATH.read_text(encoding="utf-8"))
+        configured_slot_ids = [slot["slotId"] for slot in slot_data["slots"]]
+        slot_config_error = None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        configured_slot_ids = []
+        slot_config_error = str(error)
+
     return {
         "ok": True,
         "ocrEnabled": config.ENABLE_OCR,
         "durationModelAvailable": MODEL_PATH.is_file(),
         "durationModelMetrics": metrics,
+        "cameraId": config.CAMERA_ID,
+        "sourceMode": config.SOURCE_MODE,
+        "configuredSlotIds": configured_slot_ids,
+        "configuredSlots": [
+            {"slotId": slot["slotId"], "type": slot["type"]}
+            for slot in slot_data.get("slots", [])
+        ] if slot_config_error is None else [],
+        "slotConfigError": slot_config_error,
+        "inferenceImageSize": config.YOLO_IMAGE_SIZE,
+        "confidence": config.CONFIDENCE,
+        "tiledInference": True,
+        "tileOverlap": config.TILE_OVERLAP,
+        "tracker": "ByteTrack",
     }
 
 

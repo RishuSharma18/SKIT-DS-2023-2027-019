@@ -1,8 +1,10 @@
 {
-  "_note": "Example coordinates only. Draw polygons on your own video with python tools/draw_slots.py --source samples/parking.mp4; do not use these example slots as real coordinates.",
+  "_note": "Five car-slot polygons traced from frame 30 of samples/parking.mp4 (3840x2160). IDs A-04 to A-08 match the backend's default car-slot types; only this middle row is mapped.",
   "slots": [
-    { "slotId": "A-01", "type": "bike", "polygon": [[50, 400], [130, 400], [130, 470], [50, 470]] },
-    { "slotId": "A-04", "type": "car",  "polygon": [[150, 380], [300, 380], [300, 480], [150, 480]] },
-    { "slotId": "A-10", "type": "suv",  "polygon": [[320, 380], [500, 380], [500, 480], [320, 480]] }
+    { "slotId": "A-04", "type": "car", "polygon": [[2040, 1167], [2145, 1161], [2154, 1305], [2043, 1314]] },
+    { "slotId": "A-05", "type": "car", "polygon": [[2145, 1161], [2250, 1158], [2259, 1302], [2154, 1305]] },
+    { "slotId": "A-06", "type": "car", "polygon": [[2250, 1158], [2355, 1155], [2364, 1296], [2259, 1302]] },
+    { "slotId": "A-07", "type": "car", "polygon": [[2355, 1155], [2460, 1152], [2469, 1290], [2364, 1296]] },
+    { "slotId": "A-08", "type": "car", "polygon": [[2460, 1152], [2565, 1149], [2574, 1284], [2469, 1290]] }
   ]
 }

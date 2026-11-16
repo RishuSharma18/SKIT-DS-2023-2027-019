@@ -8,24 +8,23 @@ Keys in the window:  q = quit   SPACE = pause / resume
 
 What to look for:
   * every vehicle gets a box and a stable #ID (ID should not keep changing)
-  * the label shows  #id  category  area%  (area% is the box size vs the frame)
-  * at the end it prints a summary + a suggested SUV_AREA_RATIO for your video
+  * labels show COCO categories; SUVs are included in the car class
 """
 import argparse
 import os
 import sys
 import time
 from collections import defaultdict
-from statistics import median
 
 import cv2
 
 # allow "python tools/detect_demo.py" from the ai-service folder
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import config  # noqa: E402
-from app.vehicle import CLASS_NAMES, area_ratio, categorize  # noqa: E402
+from app.detection import VehicleDetector, tile_count  # noqa: E402
+from app.vehicle import CLASS_NAMES, categorize  # noqa: E402
 
-COLORS = {"bike": (0, 200, 255), "car": (255, 160, 0), "suv": (0, 0, 255)}
+COLORS = {"bike": (0, 200, 255), "car": (255, 160, 0)}
 MAX_SHOW_WIDTH = 1280
 
 
@@ -35,6 +34,8 @@ def parse_args():
                     help="video path, webcam index (0) or rtsp url")
     ap.add_argument("--model", default=config.YOLO_MODEL, help="yolov8n.pt / yolov8s.pt / yolov8m.pt")
     ap.add_argument("--conf", type=float, default=config.CONFIDENCE, help="min detection confidence")
+    ap.add_argument("--imgsz", type=int, default=config.YOLO_IMAGE_SIZE,
+                    help="YOLO inference size; larger values help small vehicles but run slower")
     ap.add_argument("--save", help="write annotated video to this path (e.g. samples/out.mp4)")
     ap.add_argument("--no-show", action="store_true", help="do not open a window")
     ap.add_argument("--max-frames", type=int, default=0, help="stop after N frames (0 = whole video)")
@@ -49,8 +50,7 @@ def main():
             sys.exit(f"[ERROR] Video not found: {source}\n"
                      f"        Put your video at ai-service/samples/parking.mp4 or pass --source <path>")
 
-    from ultralytics import YOLO  # imported late so --help works without torch
-    model = YOLO(args.model)
+    detector = VehicleDetector(args.model, args.conf, args.imgsz)
 
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
@@ -58,16 +58,15 @@ def main():
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 25
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"[INFO] video {width}x{height} @ {src_fps:.1f} fps | model={args.model} conf={args.conf} "
-          f"| SUV_AREA_RATIO={config.SUV_AREA_RATIO}")
+    print(f"[INFO] video {width}x{height} @ {src_fps:.1f} fps | model={args.model} "
+          f"conf={args.conf} imgsz={args.imgsz} tiles={tile_count(width, height)}")
 
     writer = None
     if args.save:
         os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
         writer = cv2.VideoWriter(args.save, cv2.VideoWriter_fourcc(*"mp4v"), src_fps, (width, height))
 
-    tracks = defaultdict(lambda: {"cls": 2, "ratios": []})   # track id -> info
-    frame_area = width * height
+    tracks = defaultdict(lambda: {"cls": 2})   # track id -> info
     frames = 0
     t0 = time.time()
     paused = False
@@ -79,31 +78,30 @@ def main():
                 break
             frames += 1
 
-            res = model.track(frame, persist=True, classes=config.VEHICLE_CLASSES,
-                              tracker="bytetrack.yaml", conf=args.conf, verbose=False)[0]
+            tracks_in_frame = detector.track(frame)
 
             counts = defaultdict(int)
-            if res.boxes is not None and res.boxes.id is not None:
-                boxes = res.boxes.xyxy.cpu().numpy()
-                ids = res.boxes.id.int().cpu().tolist()
-                clss = res.boxes.cls.int().cpu().tolist()
-                for box, tid, cls_id in zip(boxes, ids, clss):
-                    ratio = area_ratio(box, frame_area)
+            if len(tracks_in_frame):
+                for track in tracks_in_frame:
+                    box = track[:4]
+                    tid = int(track[4])
+                    cls_id = int(track[6])
                     tracks[tid]["cls"] = cls_id
-                    tracks[tid]["ratios"].append(ratio)
-                    cat = categorize(cls_id, box, frame_area)
+                    cat = categorize(cls_id)
+                    if cat is None:
+                        continue
                     counts[cat] += 1
 
                     x1, y1, x2, y2 = map(int, box)
                     color = COLORS[cat]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    label = f"#{tid} {cat} ({CLASS_NAMES.get(cls_id, '?')}) {ratio * 100:.1f}%"
+                    label = f"#{tid} {cat}"
                     cv2.putText(frame, label, (x1, max(15, y1 - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
             fps = frames / max(time.time() - t0, 1e-6)
-            hud = (f"frame {frames} | {fps:.1f} fps | bike {counts['bike']}  car {counts['car']}  "
-                   f"suv {counts['suv']} | unique IDs {len(tracks)}")
+            hud = (f"frame {frames} | {fps:.1f} fps | bike {counts['bike']}  car {counts['car']} "
+                   f"| unique IDs {len(tracks)}")
             cv2.rectangle(frame, (0, 0), (width, 26), (0, 0, 0), -1)
             cv2.putText(frame, hud, (8, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
 
@@ -142,22 +140,8 @@ def summarize(tracks, frames, seconds):
     for name, n in sorted(by_cls.items()):
         print(f"  {name:<11}: {n}")
 
-    car_med = sorted(median(t["ratios"]) for t in tracks.values() if t["cls"] == 2 and t["ratios"])
-    if len(car_med) >= 2:
-        print("\nBox size of 'car' tracks (median area % of frame, smallest to largest):")
-        print("  " + "  ".join(f"{r * 100:.1f}" for r in car_med))
-        print(f"Current SUV_AREA_RATIO = {config.SUV_AREA_RATIO} ({config.SUV_AREA_RATIO * 100:.1f}%)")
-        gaps = [(right - left, left, right) for left, right in zip(car_med, car_med[1:])]
-        gap, left, right = max(gaps)
-        suggestion = (left + right) / 2
-        print(f"Largest gap: {left * 100:.1f}% to {right * 100:.1f}% "
-              f"(suggested SUV_AREA_RATIO={suggestion:.4f}).")
-        print("If that gap separates cars from SUVs in the video, set SUV_AREA_RATIO to the suggestion")
-        print("in ai-service/.env; otherwise keep the current value and inspect the detections.")
-        print("Note: cars close to the camera look bigger than the same car far away, so use a camera")
-        print("angle where parking slots are at a similar distance, or tune the value for that area.")
-    elif car_med:
-        print("\nNeed at least two distinct car tracks to suggest an SUV_AREA_RATIO.")
+    print("\nCategory note: the COCO model labels SUVs as cars; use a model trained for SUV classes")
+    print("if the dashboard must distinguish SUVs from other cars.")
     print("To tune detection sensitivity, rerun with --conf <value> (for example --conf 0.3),")
     print("then set CONFIDENCE in ai-service/.env after checking for missed vehicles and false boxes.")
     print("=============================")

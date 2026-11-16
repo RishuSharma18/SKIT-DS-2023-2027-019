@@ -9,6 +9,11 @@ const alertSchema = new mongoose.Schema(
     },
     severity: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
     plate: { type: String, default: null },
+    trackIds: {
+      type: [{ type: Number, min: 0, validate: Number.isSafeInteger }],
+      default: [],
+      validate: (trackIds) => trackIds.length <= 2,
+    },
     cameraId: { type: String, default: 'cam-1' },
     slotId: { type: String, default: null },
     message: { type: String, default: '' },

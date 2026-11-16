@@ -73,7 +73,10 @@ r.get('/analytics/hourly', wrap(async (req, res) => {
 // ---- Slots
 r.get('/slots', wrap(async (req, res) => res.json(await ParkingSlot.find().sort({ slotId: 1 }))));
 r.get('/slots/recommend', wrap(async (req, res) => {
-  const slot = await recommendSlot(req.query.type || req.query.vehicleType || 'car');
+  const slotIds = typeof req.query.slotIds === 'string'
+    ? req.query.slotIds.split(',').map((slotId) => slotId.trim()).filter(Boolean).slice(0, 100)
+    : [];
+  const slot = await recommendSlot(req.query.type || req.query.vehicleType || 'car', slotIds);
   res.json({ slot });
 }));
 
