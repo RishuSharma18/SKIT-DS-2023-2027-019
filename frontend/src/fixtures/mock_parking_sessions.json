@@ -1,0 +1,26 @@
+[
+  {
+    "sessionId": "sess-001",
+    "trackId": 101,
+    "plateNumber": "RJ14AB1234",
+    "vehicleCategory": "COMPACT_CAR",
+    "assignedSlotId": "A-01",
+    "actualSlotId": "A-01",
+    "entryTime": "2026-09-01T09:15:00Z",
+    "exitTime": null,
+    "durationMinutes": 45.0,
+    "status": "ACTIVE"
+  },
+  {
+    "sessionId": "sess-002",
+    "trackId": 102,
+    "plateNumber": "DL01XY9999",
+    "vehicleCategory": "SUV_SEDAN",
+    "assignedSlotId": "B-03",
+    "actualSlotId": "B-03",
+    "entryTime": "2026-09-01T08:30:00Z",
+    "exitTime": "2026-09-01T10:00:00Z",
+    "durationMinutes": 90.0,
+    "status": "COMPLETED"
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "cameras": [
+    { "id": "cam-1", "name": "Entrance Gate Cam", "streamUrl": "http://localhost:8000/stream/cam1" },
+    { "id": "cam-2", "name": "Zone A Overview", "streamUrl": "http://localhost:8000/stream/cam2" },
+    { "id": "cam-3", "name": "Zone B & C Overview", "streamUrl": "http://localhost:8000/stream/cam3" }
+  ]
+}
