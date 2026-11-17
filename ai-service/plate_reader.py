@@ -1,13 +1,24 @@
 
+import os
+from pathlib import Path
 import re
 import cv2
 import easyocr
 import numpy as np
 
+MODEL_DIR = Path(__file__).resolve().parent / "models" / "easyocr"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
 
 class PlateReader:
     def __init__(self):
-        self.reader = easyocr.Reader(['en'], gpu=False)
+        self.reader = easyocr.Reader(
+            ['en'],
+            gpu=False,
+            model_storage_directory=str(MODEL_DIR),
+            user_network_directory=str(MODEL_DIR),
+            download_enabled=False,
+        )
 
     def preprocess_image(self, image):
         # Convert image to grayscale

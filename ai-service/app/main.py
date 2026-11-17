@@ -2,19 +2,26 @@
 from contextlib import asynccontextmanager
 from functools import lru_cache
 import json
+import logging
 from pathlib import Path
+import secrets
 from typing import Literal
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from . import config
 from .api.event_dispatcher import EventDispatcher
 from .api.streams import StreamManager
+from .ocr.image_validation import InvalidImageError, UnsupportedImageError, decode_plate_image
+
+logger = logging.getLogger(__name__)
+MAX_OCR_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 @asynccontextmanager
@@ -46,6 +53,12 @@ class DurationRequest(BaseModel):
     vehicleType: Literal["bike", "car", "suv"]
     arrivalHour: int = Field(ge=0, le=23)
     weekday: int = Field(ge=0, le=6)
+
+
+def verify_ocr_api_key(x_api_key: str | None = Header(default=None)):
+    if not x_api_key or not secrets.compare_digest(x_api_key, config.API_KEY):
+        raise HTTPException(status_code=401, detail="A valid x-api-key header is required.")
+    return True
 
 
 @lru_cache(maxsize=1)
@@ -146,6 +159,59 @@ def video_feed(camera_id: str, request: Request):
         worker.iter_mjpeg(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@lru_cache(maxsize=1)
+def get_plate_reader():
+    from .ocr.plate_reader import PlateReader
+    return PlateReader()
+
+
+@app.post("/ocr/plate")
+async def ocr_plate_endpoint(
+    file: UploadFile = File(...),
+    _authorized: bool = Depends(verify_ocr_api_key),
+):
+    """Recognize license plate text from an uploaded image photo.
+
+    Processes in memory with zero image retention. Returns structured OCR
+    results with confidence, normalization, and alternative candidates.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    try:
+        contents = await file.read(MAX_OCR_UPLOAD_BYTES + 1)
+    finally:
+        await file.close()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    if len(contents) > MAX_OCR_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File size exceeds maximum 10MB limit.")
+
+    try:
+        image = decode_plate_image(contents)
+    except UnsupportedImageError as error:
+        raise HTTPException(status_code=415, detail=str(error)) from error
+    except InvalidImageError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    try:
+        reader = get_plate_reader()
+    except (ImportError, FileNotFoundError, RuntimeError) as error:
+        logger.exception("Could not initialize the local plate OCR model")
+        raise HTTPException(
+            status_code=503,
+            detail="Plate OCR model is unavailable. Check EasyOCR weights and any configured PLATE_MODEL path.",
+        ) from error
+
+    try:
+        return await run_in_threadpool(reader.recognize_plate_image, image)
+    except Exception as error:
+        logger.exception("Plate OCR processing failed")
+        raise HTTPException(status_code=500, detail="Plate OCR could not process this image.") from error
+
 
 
 app.mount(

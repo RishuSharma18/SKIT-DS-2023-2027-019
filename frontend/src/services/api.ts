@@ -3,9 +3,11 @@ import type {
   AllocationResult,
   ApiHealth,
   ConnectionState,
+  FacilityStats,
   LiveEvent,
   ParkingSession,
   ParkingSlot,
+  PlateOCRResult,
   SecurityAlert,
   SlotStatus,
   VehicleCategory,
@@ -35,6 +37,11 @@ function isRecord(value: unknown): value is Raw {
 
 function text(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.length ? value : fallback;
+}
+
+function identifier(value: unknown, fallback = ''): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return text(value, fallback);
 }
 
 function numeric(value: unknown, fallback = 0): number {
@@ -101,8 +108,8 @@ export function normalizeSlot(value: unknown): ParkingSlot {
   return {
     id: text(raw.slot_id ?? raw.slotId ?? raw.id, 'Unknown'),
     status: normalizeSlotStatus(raw.status),
-    category: normalizeCategory(raw.vehicle_category ?? raw.vehicleCategory ?? raw.type ?? raw.category),
-    cameraId: text(raw.camera_id ?? raw.cameraId, 'CAM_01'),
+    category: normalizeCategory(raw.allowed_category ?? raw.vehicle_category ?? raw.vehicleCategory ?? raw.type ?? raw.category),
+    cameraId: text(raw.camera_id ?? raw.cameraId, 'cam-1'),
     zone: text(raw.zone, 'Main'),
     plateNumber: text(raw.plate_number ?? raw.plate, '') || null,
   };
@@ -110,22 +117,32 @@ export function normalizeSlot(value: unknown): ParkingSlot {
 
 export function normalizeSession(value: unknown): ParkingSession {
   const raw = isRecord(value) ? value : {};
-  const checkIn = text(raw.check_in_time ?? raw.checkInTime ?? raw.entryTime, new Date().toISOString());
-  const checkOut = text(raw.check_out_time ?? raw.checkOutTime ?? raw.exitTime) || null;
-  const duration = numeric(raw.duration_seconds ?? raw.durationSeconds ?? raw.durationSec, NaN);
+  const checkIn = text(raw.entry_time ?? raw.check_in_time ?? raw.checkInTime ?? raw.entryTime, new Date().toISOString());
+  const checkOut = text(raw.exit_time ?? raw.check_out_time ?? raw.checkOutTime ?? raw.exitTime) || null;
+  const status = text(raw.status).toUpperCase();
+  const durationSeconds = numeric(raw.duration_seconds ?? raw.durationSeconds ?? raw.durationSec, NaN);
+  const durationMinutes = numeric(raw.duration_minutes ?? raw.durationMinutes, NaN);
+  const reportedDuration = Number.isFinite(durationSeconds)
+    ? durationSeconds
+    : Number.isFinite(durationMinutes) ? durationMinutes * 60 : NaN;
   const inferredValue = checkOut
     ? Math.round((Date.parse(checkOut) - Date.parse(checkIn)) / 1000)
-    : NaN;
+    : status === 'ACTIVE' || status === 'OVERSTAY'
+      ? Math.round((Date.now() - Date.parse(checkIn)) / 1000)
+      : NaN;
   const inferredDuration = Number.isFinite(inferredValue) ? Math.max(0, inferredValue) : null;
-  const status = text(raw.status).toUpperCase();
+  const duration = status === 'ACTIVE' || status === 'OVERSTAY'
+    ? inferredDuration ?? reportedDuration
+    : reportedDuration;
   const overstay = boolean(raw.overstay, false)
+    || status === 'OVERSTAY'
     || (status === 'ACTIVE' && Date.now() - Date.parse(checkIn) > OVERSTAY_HOURS * 3_600_000);
   return {
     id: text(raw.id ?? raw._id ?? raw.session_id, `${raw.trackId ?? raw.track_id ?? checkIn}`),
     plateNumber: text(raw.plate_number ?? raw.plate) || null,
     category: normalizeCategory(raw.vehicle_category ?? raw.vehicleCategory ?? raw.vehicleType ?? raw.category),
-    slotId: text(raw.slot_id ?? raw.slotId) || null,
-    cameraId: text(raw.camera_id ?? raw.cameraId, 'CAM_01'),
+    slotId: text(raw.actual_slot_id ?? raw.assigned_slot_id ?? raw.slot_id ?? raw.slotId) || null,
+    cameraId: text(raw.camera_id ?? raw.cameraId, 'cam-1'),
     checkInTime: checkIn,
     checkOutTime: checkOut,
     durationSeconds: Number.isFinite(duration) ? duration : inferredDuration,
@@ -141,20 +158,24 @@ function resolveAssetUrl(value: unknown): string | null {
   if (source.length > 100 && /^[A-Za-z0-9+/]+=*$/.test(source)) {
     return `data:image/jpeg;base64,${source}`;
   }
-  const base = API_URL || window.location.origin;
+  const base = source.startsWith('/media/alerts/') && AI_STREAM_URL
+    ? new URL(AI_STREAM_URL, window.location.href).origin
+    : source.startsWith('/media/alerts/')
+      ? window.location.origin
+      : API_URL || window.location.origin;
   return new URL(source, `${base}/`).toString();
 }
 
 export function normalizeAlert(value: unknown): SecurityAlert {
   const raw = isRecord(value) ? value : {};
-  const timestamp = text(raw.timestamp ?? raw.createdAt, new Date().toISOString());
+  const timestamp = text(raw.timestamp ?? raw.created_at ?? raw.createdAt, new Date().toISOString());
   return {
     id: text(raw.id ?? raw._id ?? raw.alert_id, timestamp),
     type: normalizeAlertType(raw.alert_type ?? raw.alertType ?? raw.type),
     severity: text(raw.severity, 'MEDIUM').toUpperCase() as SecurityAlert['severity'],
     message: text(raw.message, 'An event requires operator attention.'),
     plateNumber: text(raw.plate_number ?? raw.plate) || null,
-    cameraId: text(raw.camera_id ?? raw.cameraId, 'CAM_01'),
+    cameraId: text(raw.camera_id ?? raw.cameraId, 'cam-1'),
     slotId: text(raw.slot_id ?? raw.slotId) || null,
     snapshotUrl: resolveAssetUrl(raw.snapshot_url ?? raw.snapshotUrl ?? raw.snapshot),
     acknowledged: boolean(raw.acknowledged ?? raw.is_acknowledged, false),
@@ -165,7 +186,7 @@ export function normalizeAlert(value: unknown): SecurityAlert {
 function normalizeWatchlist(value: unknown): WatchlistEntry {
   const raw = isRecord(value) ? value : {};
   return {
-    id: text(raw.id ?? raw._id, text(raw.plate_number ?? raw.plate)),
+    id: identifier(raw.id ?? raw._id, text(raw.plate_number ?? raw.plate)),
     plateNumber: text(raw.plate_number ?? raw.plate).toUpperCase(),
     reason: text(raw.reason, 'Flagged vehicle'),
     active: boolean(raw.active ?? raw.is_active, true),
@@ -212,15 +233,41 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
 }
 
 export async function getSlots(): Promise<ParkingSlot[]> {
-  return unwrapList(await requestJson('/slots')).map(normalizeSlot);
+  return unwrapList(await requestJson('/slots?configured_only=true')).map(normalizeSlot);
 }
 
 export async function getSessions(): Promise<ParkingSession[]> {
-  return unwrapList(await requestJson('/sessions')).map(normalizeSession);
+  return unwrapList(await requestJson('/sessions?limit=500')).map(normalizeSession);
 }
 
 export async function getAlerts(): Promise<SecurityAlert[]> {
-  return unwrapList(await requestJson('/alerts')).map(normalizeAlert);
+  return unwrapList(await requestJson('/alerts?limit=500')).map(normalizeAlert);
+}
+
+export async function getFacilityStats(): Promise<FacilityStats> {
+  const timezoneOffsetMinutes = new Date().getTimezoneOffset();
+  const raw = unwrapRecord(await requestJson(`/stats?timezone_offset_minutes=${timezoneOffsetMinutes}`));
+  const rawCategories = isRecord(raw.availableByCategory)
+    ? raw.availableByCategory
+    : isRecord(raw.available_by_category) ? raw.available_by_category : {};
+  const availableByCategory = Object.fromEntries(
+    (['TWO_WHEELER', 'COMPACT_CAR', 'SUV_SEDAN', 'HEAVY_VEHICLE'] as const).map((category) => [
+      category,
+      numeric(rawCategories[category] ?? rawCategories[category.toLowerCase()]),
+    ]),
+  ) as FacilityStats['availableByCategory'];
+
+  return {
+    totalSlots: numeric(raw.totalCapacity ?? raw.totalSlots ?? raw.total_slots),
+    availableSlots: numeric(raw.availableSlots ?? raw.freeSlots ?? raw.available_slots),
+    availableByCategory,
+    occupiedSlots: numeric(raw.occupiedSlots ?? raw.occupied_slots ?? raw.occupied),
+    reservedSlots: numeric(raw.reservedSlots ?? raw.reserved_slots),
+    activeVehicles: numeric(raw.activeVehicles ?? raw.active_vehicles),
+    totalAlerts: numeric(raw.totalAlerts ?? raw.total_alerts),
+    alertsToday: numeric(raw.alertsToday ?? raw.alerts_today),
+    openAlerts: numeric(raw.openAlerts ?? raw.open_alerts),
+  };
 }
 
 export async function getWatchlist(): Promise<WatchlistEntry[]> {
@@ -232,14 +279,28 @@ export async function getHealth(): Promise<ApiHealth> {
   return { ok: health.ok === true };
 }
 
-export async function allocateSlot(category: VehicleCategory): Promise<AllocationResult> {
+export async function allocateSlot(category: VehicleCategory, cameraId: string): Promise<AllocationResult> {
   const response = unwrapRecord(await requestJson('/slots/allocate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ vehicle_category: category, vehicleType: legacyCategory(category) }),
+    body: JSON.stringify({
+      vehicle_category: category,
+      vehicleType: legacyCategory(category),
+      camera_id: cameraId,
+    }),
   }));
   const slot = response.slot ?? response.recommended_slot ?? response.recommendedSlot;
-  return { slot: slot ? normalizeSlot(slot) : null };
+  if (slot) return { slot: normalizeSlot(slot) };
+  if (!response.recommended_slot_id) return { slot: null };
+  return {
+    slot: normalizeSlot({
+      slot_id: response.recommended_slot_id,
+      allowed_category: response.allowed_category,
+      camera_id: response.camera_id ?? cameraId,
+      zone: response.zone,
+      status: response.status,
+    }),
+  };
 }
 
 export async function acknowledgeAlert(id: string): Promise<SecurityAlert> {
@@ -259,6 +320,7 @@ function watchlistPayload(input: WatchlistInput): string {
     plate: input.plateNumber.trim().toUpperCase(),
     reason: input.reason.trim(),
     active: input.active,
+    is_active: input.active,
   });
 }
 
@@ -319,9 +381,11 @@ function normalizeLiveEvent(name: string, payload: unknown): LiveEvent {
   }
   if (!isRecord(payload)) return { name, payload };
   const eventName = name === 'message'
-    ? text(payload.event_type ?? payload.eventType ?? payload.type, name)
+    ? text(payload.event_type ?? payload.eventType ?? payload.event ?? payload.type, name)
     : name;
-  const eventPayload = isRecord(payload.payload) ? payload.payload : payload;
+  const eventPayload = isRecord(payload.payload)
+    ? payload.payload
+    : isRecord(payload.data) ? payload.data : payload;
   return { name: eventName, payload: eventPayload };
 }
 
@@ -394,4 +458,31 @@ function connectNativeWebSocket(
     if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     socket?.close();
   };
+}
+
+// ─── Plate OCR ───────────────────────────────────────────────────────────────
+
+/**
+ * Upload a plate image through the backend proxy to the local AI service.
+ * The multipart payload is processed in memory and is not retained.
+ */
+export async function recognizePlate(file: File): Promise<PlateOCRResult> {
+  const form = new FormData();
+  form.append('file', file);
+  const response = await fetch(`${API_V1_ROOT}/ocr/plate`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+    body: form,
+  });
+  if (!response.ok) {
+    let detail = `OCR request failed (${response.status})`;
+    try {
+      const json = await response.json() as { detail?: unknown };
+      if (typeof json.detail === 'string') detail = json.detail;
+    } catch {
+      detail = `OCR request failed (${response.status})`;
+    }
+    throw new Error(detail);
+  }
+  return response.json() as Promise<PlateOCRResult>;
 }

@@ -2,15 +2,15 @@
 
 Final-year B.Tech project, CSE (Data Science), SKIT Jaipur, batch 2023-27. Guide: Dr. Nilam Chaudhary.
 
-CCTV video → **AI service** (YOLOv8 + EasyOCR) → **Backend** (Express + MongoDB) → **Dashboard** (React).
-The AI service uses a versioned REST event contract; realtime updates are available over `/ws/events`, while Socket.IO remains supported for older clients.
+CCTV video → **AI service** (YOLOv8 + EasyOCR) → **Backend** (FastAPI + PostgreSQL/SQLite + Redis) → **Dashboard** (React).
+The active backend is `backend/app` (FastAPI). `backend/src` and its npm scripts are legacy Express/MongoDB code and are not used by the current dashboard or AI service.
 
 ```
  ┌──────────┐  frames  ┌─────────────────┐  REST events  ┌────────────────┐  WebSocket   ┌───────────────┐
  │ CCTV /   │ ───────► │  ai-service     │ ────────────► │  backend       │ ──────────► │  frontend     │
- │ video    │          │  Python+FastAPI │  x-api-key    │  Node+Express  │  + REST     │  React (Vite) │
- └──────────┘          │  YOLOv8,OpenCV, │               │  MongoDB       │             │  dashboard    │
-                       │  EasyOCR        │               └────────────────┘             └───────────────┘
+ │ video    │          │  Python+FastAPI │  x-api-key    │  Python+FastAPI│  + REST     │  React (Vite) │
+ └──────────┘          │  YOLOv8,OpenCV, │               │  PostgreSQL   │             │  dashboard    │
+                       │  EasyOCR        │               │  + Redis      │             └───────────────┘
                        └─────────────────┘
 ```
 
@@ -18,85 +18,87 @@ The AI service uses a versioned REST event contract; realtime updates are availa
 | Folder | Owner | What lives here |
 |---|---|---|
 | `ai-service/` | Rishu (detection), Nandani (OCR) | Multi-camera ingestion, detection/tracking, OCR, zone rules |
-| `backend/` | Vaibhav | REST API, MongoDB models, event handling, alerts, realtime events |
+| `backend/app/` | Vaibhav | Active FastAPI API, SQLAlchemy models, event handling, alerts, WebSockets |
+| `backend/src/` | Legacy | Historical Express/MongoDB implementation; not part of the active run path |
 | `frontend/` | Bhumi | React dashboard |
 | `docs/` | everyone | Plan, Git workflow, report material |
 
 ## Quick start (first time)
-Prereqs: Node 18+, Python 3.10+, Docker (for MongoDB) or a local MongoDB.
+Prereqs: Node 18+, Python 3.10+, and PostgreSQL/Redis (Docker Compose is optional; the backend can use its SQLite/in-memory development fallbacks).
 
-```bash
-# 1. database
-docker compose up -d
+Start PostgreSQL and Redis if using Docker:
 
-# 2. backend  (terminal 1)
-cd backend
-cp .env.example .env
-npm install
-npm run seed          # creates 12 slots + 2 demo watchlist plates
-npm run seed-zones    # non-destructively syncs sample-camera polygons from ai-service/config/slots.json
-npm run dev           # http://localhost:5000/api/health
-
-# 3. frontend (terminal 2)
-cd frontend
-npm install
-npm run dev           # http://localhost:5173; proxies AI requests to port 8001
-
-# 4. ai-service (terminal 3)
-cd ai-service
-python -m venv .venv
-source .venv/bin/activate                             # Windows Git Bash: source .venv/Scripts/activate
-python -m pip install -r requirements.txt
-# Train the optional duration-estimation prototype used by the dashboard.
-python ml/generate_data.py
-python ml/train_duration_model.py
-# Copy .env.example to .env if .env does not already exist; merge settings instead of overwriting an existing .env.
-# Record or download a parking video to samples/parking.mp4 (video files are gitignored).
-# Use tools/draw_slots.py to draw slot polygons for that video before running the pipeline.
-python tools/draw_slots.py --source samples/parking.mp4 --out config/slots.json
-python tools/detect_demo.py --source samples/parking.mp4 --imgsz 1280 --conf 0.25
-# Larger imgsz can find more distant/small vehicles but is slower; compare with --imgsz 640.
-# Review boxes and IDs; tune CONFIDENCE and YOLO_IMAGE_SIZE in .env for your camera.
-# Run the AI API; it loads zones from the backend and starts each configured camera:
-uvicorn app.main:app --host 127.0.0.1 --port 8001
-# For a standalone local preview instead, keep backend running, stop Uvicorn and run:
-python run_pipeline.py --show
+```powershell
+docker compose up -d postgres redis
 ```
 
-On Windows PowerShell, the equivalent AI-service setup is:
+Start the backend in Terminal 1:
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+# Set the same non-default AI_API_KEY in backend/.env and ai-service/.env before integration.
+# Without PostgreSQL, set DATABASE_URL=sqlite:///./cctv_parking.db in backend/.env before migrations.
+alembic upgrade head
+# If upgrading a pre-Alembic SQLite database created by an older app version, run this once instead:
+# alembic stamp 001_initial_schema
+# alembic upgrade head
+python scripts\seed.py
+# Optional: replace the seed polygons with the current AI-service camera map.
+python scripts\sync_camera_zones.py --camera-id cam-1
+python -m uvicorn app.main:app --host 127.0.0.1 --port 5000 --reload
+```
+
+Start the frontend in Terminal 2:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Set up the AI service in Terminal 3:
 
 ```powershell
 cd ai-service
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-# Train the optional dashboard duration estimate (uses synthetic prototype data).
-python ml\generate_data.py
-python ml\train_duration_model.py
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 New-Item -ItemType Directory -Force samples | Out-Null
-# Put your parking video at samples\parking.mp4, then:
-python tools\draw_slots.py --source samples\parking.mp4 --out config\slots.json
-# With backend running and seeded, sync these polygons without deleting other parking slots:
-cd ..\backend
-npm run seed-zones
-cd ..\ai-service
-python tools\detect_demo.py --source samples\parking.mp4
-# For dashboard integration, run the AI API on port 8001:
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+# Set BACKEND_URL=http://localhost:5000 and the matching AI_API_KEY in ai-service/.env.
+# Put a camera video at samples\parking.mp4 and draw its polygons if needed:
+# python tools\draw_slots.py --source samples\parking.mp4 --out config\slots.json
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
-The sample `ai-service/config/slots.json` maps five marked car spaces from the included sample video's
-3840x2160 frame; it is only suitable for that same fixed camera and frame geometry, not a confirmed
-physical facility. The dashboard identifies prerecorded input as video replay and hides live counts
-and recommendations until a webcam or network camera and matching spaces are configured. It only
-displays the spaces mapped by the active camera; occupancy is refreshed from detections in those bays.
-For live cameras, set `RTSP_URLS` in `ai-service/.env` to a JSON object or comma-separated
+The backend defaults to SQLite and in-memory caching when PostgreSQL/Redis are unavailable.
+The health endpoint reports the active storage (`sqlite-fallback` when applicable). Do not use
+the default `dev-key` in a deployed environment; set the same strong `AI_API_KEY` in both services.
+Apply Alembic migrations before starting against an existing database.
+If an older app already created the SQLite tables before Alembic was introduced, record that
+matching schema with `alembic stamp 001_initial_schema` once, then run `alembic upgrade head`;
+this preserves existing rows while applying newer migrations. Do not stamp a fresh database.
+
+The sample `ai-service/config/slots.json` maps five open compact-car bays in the top row of the
+included sample video's frame 30 (3840x2160); it is only suitable for that same fixed camera and
+frame geometry, not a confirmed physical facility. The dashboard capacity and category counts only
+include slots with configured polygons; active vehicles include active and overstay sessions, and
+the alert KPI is the all-time total with open and local-today counts beneath it. The dashboard
+identifies prerecorded input as video replay and hides live counts and recommendations until a
+webcam or network camera and matching spaces are configured. It only displays the spaces mapped by
+the active camera; occupancy is refreshed from detections in those bays. For live cameras, set
+`RTSP_URLS` in `ai-service/.env` to a JSON object or comma-separated
 `CAMERA_ID=RTSP_URL` pairs. Each camera has an independent reconnecting reader, tracker, and
 analytics worker; inspect their state at `/health` and their video at `/video_feed/{camera_id}`.
-The dashboard feed uses the primary configured camera. Slot polygons are fetched from the backend;
-the sample sync script updates only those slots and does not delete unrelated records. Sample-video
-occupancy is broadcast as a temporary estimate and is not saved,
+The dashboard feed uses the primary configured camera. Slot polygons are fetched from the backend's
+`/api/v1/cameras/{camera_id}/zones` endpoint. `backend/scripts/sync_camera_zones.py` upserts the selected camera's configured polygons and clears
+stale polygons for that camera without deleting its slots or touching other cameras. The current backend
+stores slot polygons; its zone response leaves `no_parking_zones` and `tripwires` empty until those
+zone types are added to backend storage. Sample-video occupancy is broadcast as a temporary estimate and is not saved,
 and replay-generated sessions and alerts are disabled.
 YOLO's COCO classes include motorcycle and car (SUVs are included in car); COCO cannot reliably
 distinguish an SUV from another car. A separately trained classifier is needed for that distinction.
@@ -113,6 +115,42 @@ accuracy measurements; validate on annotated frames from the target camera. COCO
 classes map to `HEAVY_VEHICLE`; a separate custom model/class map is required to distinguish SUVs
 from other cars.
 
+### Number-plate OCR from a photo
+
+Plate OCR is a separate dashboard workflow from CCTV vehicle detection. Open **Plate OCR**, choose
+or drop a JPEG, PNG, WebP, or BMP photo (maximum 10MB), preview it, then explicitly select
+**Recognize plate**. Results show the raw OCR text, a format-normalized suggestion, confidence, and
+alternatives when available. Review every result against the image; a recognized string is not
+identity verification. The photo is forwarded through the backend to the local AI service and is
+processed in memory, not persisted.
+
+The backend must be running with `AI_SERVICE_URL=http://127.0.0.1:8001`, and the backend and
+AI-service `.env` files must have the same `AI_API_KEY`. The AI service requires local EasyOCR
+English model weights in `ai-service/models/easyocr` by default (or configure
+`EASYOCR_MODEL_DIR`). The OCR endpoint does not download weights at runtime; if the weights are
+missing, it reports an actionable service error. For best recognition, upload a sharp, close-up
+image with the full plate visible. With `PLATE_MODEL` unset, EasyOCR reads text from the submitted
+image without a dedicated plate-localization model, so whole-vehicle photos may not yield a plate.
+`PLATE_MODEL` can point to an existing local YOLO plate detector weight if available.
+If the English EasyOCR files are missing, download them once using EasyOCR's model loader:
+
+```powershell
+cd ai-service
+.\.venv\Scripts\python.exe -c "import easyocr; easyocr.Reader(['en'], gpu=False, model_storage_directory='models/easyocr', download_enabled=True)"
+```
+
+The app itself keeps model downloading disabled. The browser-facing backend currently has no user
+authentication, consistent with the rest of this prototype API; expose it only on a trusted network.
+
+Example request (backend and AI service must both be running):
+
+```powershell
+curl.exe -F "file=@C:\path\to\plate.jpg" http://localhost:5000/api/v1/ocr/plate
+```
+
+Run the OCR service tests with `cd ai-service; python tests_plate.py`; the backend proxy and
+upload-validation checks are included in `python tests/run_tests.py`.
+
 ### Test a crash alert end to end
 
 The synthetic tests cover the detector and backend crash-event contract:
@@ -120,7 +158,7 @@ The synthetic tests cover the detector and backend crash-event contract:
 ```bash
 cd ai-service && python tests_crash.py
 cd ai-service && python tests_vehicle.py && python tests_detection.py
-cd ../backend && npm test
+cd ../backend && python tests/run_tests.py
 ```
 
 With the backend running, submit a synthetic crash event to verify it appears in the dashboard Alerts panel:
@@ -142,35 +180,36 @@ A **stolen_vehicle** alert should appear on the dashboard (that plate is in the 
 ## REST API Endpoints
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `GET` | `/api/health` | None | Health check & server status |
+| `GET` | `/api/health` | None | Database health and active storage |
 | `GET` | `/api/stats` | None | Overview metrics (total slots, free, occupied, active vehicles, today's entries, open alerts) |
 | `GET` | `/api/analytics/hourly` | None | Today's parking entries grouped by hour |
 | `GET` | `/api/slots` | None | List all parking slots and real-time statuses |
-| `GET` | `/api/slots/recommend?vehicleType=car` | None | Recommend best available slot for `bike`, `car`, `suv`, or `heavy_vehicle` |
+| `GET` | `/api/slots/recommend?vehicleType=car` | None | Legacy best available slot recommendation |
 | `GET` | `/api/sessions` | None | List parking sessions |
 | `GET` | `/api/alerts` | None | List recent security and safety alerts |
 | `PATCH` | `/api/alerts/:id/ack` | None | Acknowledge/dismiss an alert |
 | `POST` | `/api/events` | `x-api-key` | Ingest AI tracking/safety events (validated payload) |
-| `GET` | `/api/v1/cameras/:cameraId/zones` | `x-api-key` | Fetch slot polygons, no-parking zones, and tripwires |
-| `PUT` | `/api/v1/cameras/:cameraId/zones` | `x-api-key` | Update camera geometry using canonical polygons |
+| `GET` | `/api/v1/cameras/{camera_id}/zones` | `x-api-key` | Fetch that camera's persisted slot polygons |
 | `POST` | `/api/v1/ai-events` | `x-api-key` | Ingest versioned canonical AI events |
-| `WS` | `/ws/events` | None | Receive realtime events as `{ "event", "payload" }` JSON |
+| `WS` | `/ws/events` | None | Receive realtime events as `{ "event", "data" }` JSON |
 
 ## Dashboard service indicators and ML estimate
-The dashboard's live badge reflects the backend Socket.IO connection. Its service strip checks the backend API and AI-service health, camera stream, OCR configuration, and whether the duration model is present. Recognized plates are shown from OCR events saved on parking sessions; safety-alert snapshots link to the backend `/uploads` endpoint.
+The dashboard's live badge reflects its native WebSocket connection. Its service strip checks the backend API and AI-service health, camera stream, OCR configuration, and whether the duration model is present. Recognized plates are shown from OCR events saved on parking sessions; AI snapshots are served from the AI service's `/media/alerts` endpoint.
 
-The dashboard also supports the `/api/v1` aliases for the REST endpoints, `POST /api/v1/slots/allocate`, and `GET/POST/PUT/DELETE /api/v1/watchlist`. It receives standardized live event envelopes from the backend at `/ws/events`; existing Socket.IO clients remain supported. Copy `frontend/.env.example` to `.env.local` to configure the optional `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`, `NEXT_PUBLIC_AI_STREAM_URL`, and `NEXT_PUBLIC_CAMERA_IDS` values.
+The dashboard calls the FastAPI `/api/v1` endpoints, including `POST /api/v1/slots/allocate` and watchlist CRUD. Allocation reserves a slot; when a camera-frame `reference_point` is supplied, the backend selects the geometrically nearest slot by polygon centroid. Without a reference point, it deterministically sorts by zone and slot ID. Copy `frontend/.env.example` to `.env.local` to configure the optional `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`, `NEXT_PUBLIC_AI_STREAM_URL`, and `NEXT_PUBLIC_CAMERA_IDS` values.
 
 The AI service exposes `GET /health` and `POST /ml/predict-duration`. The latter accepts `{"vehicleType":"car","arrivalHour":9,"weekday":0}` and returns an estimated stay in minutes. The estimate is a prototype trained on generated synthetic data; the current backend slot recommendation still uses its existing allocation rules and does not use this estimate to select a space.
 
-## Event contract (ai-service → backend `POST /api/events`)
-| type | fields | effect |
+## Event contract (ai-service → backend `POST /api/v1/ai-events`)
+The AI dispatcher sends canonical snake_case fields and `event_type`; the backend also accepts
+the older `type`, `trackId`, and `vehicleType` aliases for compatibility.
+
+| event_type | fields | effect |
 |---|---|---|
-| `entry` | trackId, vehicleType, plate? | creates session, returns recommended slot |
-| `plate` | trackId, plate | attaches plate, checks watchlist |
-| `parked` | trackId, slotId | marks slot occupied |
-| `exit` | trackId | closes session, stores duration, frees slot |
-| `wrong_parking` | trackId, plate?, message? | raises alert |
-| `crash` | trackIds? (two IDs), message?, snapshot? | raises high-severity alert; dashboard shows both track IDs |
+| `ENTRY` | track_id, vehicle_category, camera_id, plate_number? | creates a session; subsequent recognized-plate entry updates that session |
+| `EXIT` | track_id, camera_id | closes the matching camera session and frees its slot |
+| `ALERT` | alert_type, track_id, camera_id, message, snapshot_url? | raises a matching safety alert |
+| `plate` (legacy) | track_id, plate | attaches plate and checks watchlist |
+| `parked` (legacy) | track_id, slot_id | marks slot occupied |
 
 Watchlist is **simulated** for the prototype (as stated in the proposal).

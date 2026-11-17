@@ -1,10 +1,10 @@
 {
-  "_note": "Five car-slot polygons traced from frame 30 of samples/parking.mp4 (3840x2160). IDs A-04 to A-08 match the backend's default car-slot types; only this middle row is mapped.",
+  "_note": "Five empty compact-car bays traced from frame 30 of samples/parking.mp4 (3840x2160). The top row is the monitored camera area; keep these polygons aligned if the video source or camera view changes.",
   "slots": [
-    { "slotId": "A-04", "type": "car", "polygon": [[2040, 1167], [2145, 1161], [2154, 1305], [2043, 1314]] },
-    { "slotId": "A-05", "type": "car", "polygon": [[2145, 1161], [2250, 1158], [2259, 1302], [2154, 1305]] },
-    { "slotId": "A-06", "type": "car", "polygon": [[2250, 1158], [2355, 1155], [2364, 1296], [2259, 1302]] },
-    { "slotId": "A-07", "type": "car", "polygon": [[2355, 1155], [2460, 1152], [2469, 1290], [2364, 1296]] },
-    { "slotId": "A-08", "type": "car", "polygon": [[2460, 1152], [2565, 1149], [2574, 1284], [2469, 1290]] }
+    { "slotId": "A-01", "type": "car", "polygon": [[600, 72], [690, 78], [680, 155], [585, 150]] },
+    { "slotId": "A-02", "type": "car", "polygon": [[690, 78], [785, 83], [775, 160], [680, 155]] },
+    { "slotId": "A-03", "type": "car", "polygon": [[785, 83], [880, 88], [870, 165], [775, 160]] },
+    { "slotId": "A-04", "type": "car", "polygon": [[880, 88], [975, 93], [965, 170], [870, 165]] },
+    { "slotId": "A-05", "type": "car", "polygon": [[975, 93], [1070, 98], [1060, 175], [965, 170]] }
   ]
 }

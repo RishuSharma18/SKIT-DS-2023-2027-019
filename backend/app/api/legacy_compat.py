@@ -1,8 +1,14 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import HTTPException
+from sqlalchemy import String, cast, func, text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db
+from app.database import engine
+from app.config import settings
+from app.api.dependencies import verify_api_key
 from app.models.parking_slot import ParkingSlot
 from app.models.vehicle_session import VehicleSession
 from app.models.watchlist import Watchlist
@@ -14,26 +20,75 @@ from app.services.event_ingestion import process_ai_event
 legacy_router = APIRouter(prefix="/api", tags=["Legacy Frontend Compatibility"])
 
 @legacy_router.get("/health")
-def health():
-    return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
+def health(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="Database health check failed.") from exc
+
+    is_fallback = engine.dialect.name == "sqlite" and not settings.DATABASE_URL.startswith("sqlite")
+    return {
+        "ok": True,
+        "database": "sqlite-fallback" if is_fallback else engine.dialect.name,
+        "time": datetime.now(timezone.utc).isoformat(),
+    }
 
 @legacy_router.get("/stats")
-def stats(db: Session = Depends(get_db)):
-    start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    total_slots = db.query(ParkingSlot).count()
-    free_slots = db.query(ParkingSlot).filter(ParkingSlot.status == "AVAILABLE").count()
-    occupied = db.query(ParkingSlot).filter(ParkingSlot.status == "OCCUPIED").count()
-    active_vehicles = db.query(VehicleSession).filter(VehicleSession.status == "ACTIVE").count()
+@legacy_router.get("/v1/stats")
+def stats(
+    timezone_offset_minutes: int = Query(0, ge=-840, le=840),
+    db: Session = Depends(get_db),
+):
+    now_utc = datetime.now(timezone.utc)
+    local_now = now_utc - timedelta(minutes=timezone_offset_minutes)
+    start_of_today = (
+        local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        + timedelta(minutes=timezone_offset_minutes)
+    )
+    configured_slots = db.query(ParkingSlot).filter(
+        ParkingSlot.polygon_coords.isnot(None),
+        cast(ParkingSlot.polygon_coords, String) != "null",
+    )
+    total_slots = configured_slots.count()
+    free_slots = configured_slots.filter(ParkingSlot.status == "AVAILABLE").count()
+    occupied = configured_slots.filter(
+        ParkingSlot.status.in_(("OCCUPIED", "VIOLATION"))
+    ).count()
+    reserved = configured_slots.filter(ParkingSlot.status == "RESERVED").count()
+    available_by_category = {
+        category: count
+        for category, count in (
+            db.query(ParkingSlot.allowed_category, func.count(ParkingSlot.slot_id))
+            .filter(
+                ParkingSlot.polygon_coords.isnot(None),
+                cast(ParkingSlot.polygon_coords, String) != "null",
+                ParkingSlot.status == "AVAILABLE",
+            )
+            .group_by(ParkingSlot.allowed_category)
+            .all()
+        )
+    }
+    active_vehicles = db.query(VehicleSession).filter(
+        VehicleSession.status.in_(("ACTIVE", "OVERSTAY"))
+    ).count()
     today_entries = db.query(VehicleSession).filter(VehicleSession.entry_time >= start_of_today).count()
-    open_alerts = db.query(Alert).filter(Alert.is_acknowledged == False).count()
+    total_alerts = db.query(Alert).count()
+    open_alerts = db.query(Alert).filter(Alert.is_acknowledged.isnot(True)).count()
+    alerts_today = db.query(Alert).filter(Alert.created_at >= start_of_today).count()
 
     return {
         "totalSlots": total_slots,
+        "totalCapacity": total_slots,
         "freeSlots": free_slots,
+        "availableSlots": free_slots,
+        "availableByCategory": available_by_category,
         "occupied": occupied,
         "occupiedSlots": occupied,
+        "reservedSlots": reserved,
         "activeVehicles": active_vehicles,
         "todayEntries": today_entries,
+        "totalAlerts": total_alerts,
+        "alertsToday": alerts_today,
         "openAlerts": open_alerts,
     }
 
@@ -56,12 +111,22 @@ def hourly_analytics(
     return hourly
 
 @legacy_router.get("/slots")
-def get_slots_compat(db: Session = Depends(get_db)):
-    slots = db.query(ParkingSlot).order_by(ParkingSlot.zone.asc(), ParkingSlot.slot_id.asc()).all()
+def get_slots_compat(
+    configured_only: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    query = db.query(ParkingSlot)
+    if configured_only:
+        query = query.filter(
+            ParkingSlot.polygon_coords.isnot(None),
+            cast(ParkingSlot.polygon_coords, String) != "null",
+        )
+    slots = query.order_by(ParkingSlot.zone.asc(), ParkingSlot.slot_id.asc()).all()
     return [
         {
             "_id": s.slot_id,
             "slotId": s.slot_id,
+            "cameraId": s.camera_id,
             "zone": s.zone,
             "type": "car" if "CAR" in s.allowed_category else "bike" if "TWO" in s.allowed_category else "suv",
             "status": "free" if s.status == "AVAILABLE" else "occupied" if s.status == "OCCUPIED" else "reserved",
@@ -84,6 +149,7 @@ def recommend_slot_compat(
         "slot": {
             "_id": slot.slot_id,
             "slotId": slot.slot_id,
+            "cameraId": slot.camera_id,
             "zone": slot.zone,
             "type": slot.allowed_category,
             "status": slot.status,
@@ -216,5 +282,9 @@ def delete_watchlist_compat(id: str, db: Session = Depends(get_db)):
     return None
 
 @legacy_router.post("/events", status_code=status.HTTP_201_CREATED)
-async def post_event_compat(payload: AIEventPayload, db: Session = Depends(get_db)):
+async def post_event_compat(
+    payload: AIEventPayload,
+    db: Session = Depends(get_db),
+    _auth: bool = Depends(verify_api_key),
+):
     return await process_ai_event(db, payload)

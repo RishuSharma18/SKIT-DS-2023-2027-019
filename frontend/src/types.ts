@@ -71,3 +71,32 @@ export interface ToastMessage {
 export interface ApiHealth {
   ok: boolean;
 }
+
+export interface PlateOCRCandidate {
+  text: string;
+  confidence: number;
+}
+
+export interface PlateOCRResult {
+  success: boolean;
+  plate_detected: boolean;
+  text: string | null;
+  raw_text: string | null;
+  normalized_text: string | null;
+  confidence: number;
+  is_low_confidence: boolean;
+  candidates: PlateOCRCandidate[];
+  error: string | null;
+}
+
+export interface FacilityStats {
+  totalSlots: number;
+  availableSlots: number;
+  availableByCategory: Record<VehicleCategory, number>;
+  occupiedSlots: number;
+  reservedSlots: number;
+  activeVehicles: number;
+  totalAlerts: number;
+  alertsToday: number;
+  openAlerts: number;
+}

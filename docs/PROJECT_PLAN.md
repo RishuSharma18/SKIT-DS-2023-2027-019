@@ -42,6 +42,6 @@ Source: Form-1, Form-2, proposal PDF and PPT. Sprint names and owners follow For
 - The sample slot map covers five spaces in one prerecorded camera view. It is not a map or live occupancy reading for a real facility; configure a live camera and draw that facility's spaces first.
 - Plate OCR needs a camera that sees plates clearly. Plan to fine-tune or add a plate-detector (YOLO trained on a plate dataset) if EasyOCR on whole-vehicle crops is weak.
 - TensorFlow is listed in the PPT. It is only needed if you build the slot/crash ML model in TF; scikit-learn or PyTorch (already pulled by ultralytics) are lighter. Decide in Phase 5.
-- DB: Form-1 says MySQL, proposal/Form-2 say MongoDB. The scaffold uses MongoDB; tell your mentor so the documents match.
+- DB: The active backend in `backend/app` uses SQLAlchemy with PostgreSQL (or SQLite for local fallback); the retained `backend/src` legacy service uses MongoDB. Align the proposal and mentor-facing documents with the active service.
 - Crash detection from plain CCTV is the hardest feature; keep it as a heuristic with a clear "prototype" label.
 - No public dataset is perfect; record your own parking-lot clips (phone from a height) plus public clips for testing.

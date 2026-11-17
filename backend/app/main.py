@@ -20,6 +20,8 @@ from app.api.v1.slots import router as slots_router
 from app.api.v1.sessions import router as sessions_router
 from app.api.v1.watchlist import router as watchlist_router
 from app.api.v1.alerts import router as alerts_router
+from app.api.v1.cameras import router as cameras_router
+from app.api.v1.ocr import router as ocr_router
 from app.api.legacy_compat import legacy_router
 
 logging.basicConfig(
@@ -106,6 +108,8 @@ app.include_router(slots_router, prefix=settings.API_V1_STR)
 app.include_router(sessions_router, prefix=settings.API_V1_STR)
 app.include_router(watchlist_router, prefix=settings.API_V1_STR)
 app.include_router(alerts_router, prefix=settings.API_V1_STR)
+app.include_router(cameras_router, prefix=settings.API_V1_STR)
+app.include_router(ocr_router, prefix=settings.API_V1_STR)
 
 # Include Legacy Compatibility Router
 app.include_router(legacy_router)
